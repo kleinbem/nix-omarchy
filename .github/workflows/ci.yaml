@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: kleinbem/actions/nix-setup@f716d62182471a9e862ae0bd61d34201e6cea971 # v1.3.1
+        with:
+          nix-path: nixpkgs=channel:nixos-unstable
+          free-disk-space: "true"
+      - name: Build omarchy package
+        run: nix build -L --no-link .#packages.x86_64-linux.omarchy
+      - name: Check flake evaluation
+        run: nix flake check --no-build

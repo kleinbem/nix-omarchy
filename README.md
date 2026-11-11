@@ -1,0 +1,516 @@
+# nix-omarchy
+
+A NixOS port of [basecamp/omarchy](https://github.com/basecamp/omarchy), the
+Quattro generation.
+
+Omarchy is DHH's opinionated Linux desktop. As of Quattro, its "desktop" is a
+single [quickshell](https://quickshell.org) process: the bar, launcher,
+menus, notifications, OSDs, control panels, lock screen, and polkit agent are
+all plugins of one long-running shell. It is driven by a Lua-based Hyprland
+config (≥0.56) and ~540 `omarchy-*` bash scripts, themed by a TOML + template
+engine.
+
+This project ports that to NixOS **by vendoring upstream**, not by
+hand-translating it. The upstream `basecamp/omarchy` quattro tree is packaged
+as a Nix derivation and wired into a NixOS module + a Home-Manager module, so
+the desktop you get is the real Omarchy desktop, not a reimplementation.
+
+## Status
+
+**Vendored Omarchy desktop with automated behavioral coverage.** The port
+reproduces the real Omarchy desktop: Hyprland session via uwsm,
+quickshell bar/menus, Super+Enter terminal, theme switching with live
+colors (not just wallpaper), editable user configs, first-run hooks, the
+full upstream package set (including the 21 upstream-owned packages
+that the pinned nixpkgs lacks or carries only as an unrelated or older
+build, packaged under `pkgs/`), and a NixOS-native
+`omarchy update` flow. Earlier revisions were verified in a running
+session on real Intel GPU hardware (2026-07-28). The October 22 snapshot
+passes all 46 flake checks, including four VM tests. Physical GPU
+verification of this bump is pending; historical hardware results apply
+to their stated revisions.
+
+Automated NixOS tests run under `nix flake check`:
+`checks.omarchy-desktop` (stack comes up), `checks.omarchy-ux`
+(behavioral acceptance: Super+Enter opens foot, theme files and live
+titlebar colors, lock cycles, virtual monitor hotplug, plugin reloads,
+config editability, and command coverage of menu actions and `when:`/`disabled:` guards,
+autostart, and systemd command — the shell's QML exec sites are pinned
+by a reviewed per-site list), `checks.omarchy-fish` (vendor
+profile parity), and `checks.omarchy-sddm` (the real login path: SDDM
+with its Wayland greeter and the omarchy theme, autologin into the uwsm
+session, and a greeter render of the vendored theme).
+
+Most VM tests start the session from tty1 with SDDM disabled (the sddm
+check being the exception). Theme-file checks use headless rendering;
+the floating-titlebar check runs real theme IPC and checks rendered
+colors. Package/update checks skip the real system rebuild. These tests
+do not establish every live bar/shell color path, physical monitor
+identity, input through the CJK engines, interactive SDDM login, or a
+complete update followed by activation. The sddm check covers the daemon,
+the greeter's theme render and the autologin handoff. The remaining paths
+need separate desktop verification after relevant changes.
+
+> This port tracks the `quattro` branch at `3c7027d` (2026-10-22), after
+> `4.5.0-rc1` (2026-10-20). Stable `4.0.6` (2026-10-19) is a divergent
+> backport line, not the base of this snapshot.
+> The vendored `version` file still reads `4.0.0.alpha` — upstream does
+> not bump it at release time.
+
+### Known app behaviour (zcode-desktop's desktop entry)
+
+On every start the ZCode app self-registers its deep-link handler: if no
+system `zcode.desktop` is visible in `$XDG_DATA_DIRS`, it writes a
+user-level `~/.local/share/applications/zcode.desktop` whose `Exec` is the
+running binary's absolute path — for a copy run outside the system profile
+(a build output, `nix run`, a test harness) that is an un-wrapped store
+path, which shadows the packaged entry and can dangle after garbage
+collection. Once the app is installed through the Install menu, the packaged
+entry is visible and the app removes its own leftover user file on the next
+start (recognized by the marker line `Comment=ZCode Desktop App`). A
+same-named file *without* that marker is kept — and permanently shadows the
+packaged one — so never recreate the entry by hand: delete a stray
+user-level `zcode.desktop` instead, and clean it up after running the app
+from a build output.
+
+### Known VM limitation (VirtualBox VMSVGA)
+
+`quickshell` crashes with `unknown object (50), message attach` under
+VirtualBox's VMSVGA renderer even though Hyprland itself renders. This is
+a VM graphics-stack issue, not an omarchy-nix bug: the same config runs
+`quickshell` stably on real Intel GPU hardware, and the automated VM
+tests (`checks.omarchy-desktop`/`-ux`, QEMU with `virtio-gpu-pci`)
+exercise the real shell over IPC. Use real metal or a GPU-passthrough VM
+for manual desktop exploration.
+
+## Changelog
+
+- **2026-10-22** — Upstream Quattro advances to `3c7027d` (206 commits),
+  vendoring per-monitor workspaces and the Omapager notification engine.
+  Quickshell is pinned to `0.3.2.r7.g2b4501a` with both load/reload
+  patches retained. NetworkManager connectivity checks and timesyncd
+  fallbacks are native; T3 and agent installs stay in the Nix catalog,
+  which also handles the new 1Password removal entry. Wallpaper copies
+  stay writable, missing Neovim migration sources remain pending for
+  retry, and ZCode's glyph preserves Tailscale's new upstream slot.
+  All 46 checks, including four VM tests, pass. User services receive
+  their IPC tools and helpers, fixing OWE's shell handoff; Taildrop
+  honors the configured Tailscale package. Physical GPU verification
+  is pending. See the full entry for the verification limits.
+
+Full history: [`CHANGELOG.md`](CHANGELOG.md). Upstream adaptation
+details and the bump checklist: [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
+
+## Design rule
+
+**Ship the real Omarchy desktop on NixOS: vendor upstream, do not rewrite it.**
+
+The running desktop is produced by the same code that produces it on Arch
+Omarchy: the same quickshell process (`$OMARCHY_PATH/shell/shell.qml`), the
+same Hyprland Lua config chain, the same ~540 `omarchy-*` bash scripts, the
+same TOML + template theme engine. The NixOS layer is glue (a vendoring
+derivation, two modules, options, activation), not a reimplementation.
+
+When a change is proposed, ask: does the running desktop stay the real
+Omarchy desktop, or does this turn the port into a reimplementation? "It
+would be cleaner in Nix" is not sufficient reason to deviate.
+
+## Quick start
+
+> **Supported architecture: `x86_64-linux` only.** The flake advertises no
+> other systems, and importing the module on one fails evaluation with a
+> clear message instead of a missing-attribute error. The VM checks are
+> x86_64-only for the same reason (`hardware.graphics.enable32Bit`), so
+> aarch64 support waits until those checks can evaluate there.
+
+Add `omarchy-nix` to your flake inputs and import the NixOS + Home-Manager
+modules. One `omarchy.enable = true` wires the whole desktop:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    omarchy-nix = {
+      url = "github:zicochaos/omarchy-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    home-manager = {
+      url = "github:nix-community/home-manager/release-26.05";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { nixpkgs, omarchy-nix, home-manager, ... }: {
+    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        omarchy-nix.nixosModules.default
+        home-manager.nixosModules.home-manager
+        # The omarchy HM module is shared with all home-manager.users, so
+        # per-user blocks only carry user settings (see example/).
+        { home-manager.sharedModules = [ omarchy-nix.homeModules.default ]; }
+      ];
+    };
+  };
+}
+```
+
+> **Follow `nixpkgs` (the snippet does).** Without
+> `omarchy-nix.inputs.nixpkgs.follows = "nixpkgs"` your system carries a
+> second nixpkgs instance: the vendored desktop tree and the
+> upstream-owned apps are built from this flake's pin, so their
+> dependencies sit beside your system's copies instead of sharing them —
+> a real consumer measured ~360 duplicated packages and 1.7 GiB of
+> duplicated closure, with the desktop running packages weeks behind the
+> rest of the system. Following makes those build from your nixpkgs. The
+> tradeoff: your pin then decides those packages (keep it current — the
+> supported combination is a `nixos-26.05` nixpkgs, the one
+> `nix flake check` tests), and the vendored tree, the theme packages and
+> the upstream-owned apps rebuild once per nixpkgs revision (the rest of
+> the desktop is substitutable from cache.nixos.org, except Hyprland and
+> its hypr* libraries: hyprland.cachix.org only keeps recent builds of
+> Hyprland's main branch, not the release this flake pins, so those
+> compile locally once per Hyprland bump).
+>
+> Two duplicates remain by design: the Hyprland stack and Mesa
+> (`hardware.graphics.package` and `package32`) come from the `hyprland`
+> input's own nixpkgs, because Hyprland is built against it and the
+> drivers have to match the compositor. Installing
+> the Hermes agent from the menu pulls that project's own flake and
+> nixpkgs as well. To track exactly the tested combination instead, omit
+> the follow — the desktop is then built from this flake's pinned nixpkgs
+> and only moves when you update omarchy-nix.
+
+> The attribute name must match the machine's hostname: the menu
+> Install/Remove actions and `omarchy update` resolve
+> `nixosConfigurations."$(hostname)"`. Naming it `my-host` while the host
+> is called something else still gives a working desktop, but those
+> commands fail with a resolver error (see the resolver contract below).
+
+and in `configuration.nix`:
+
+```nix
+{ ... }:
+
+{
+  omarchy.enable = true;
+  omarchy.full_name = "Your Name";
+  omarchy.email_address = "you@example.com";
+  omarchy.theme = "ethereal";   # one of the 23 stock themes
+
+  users.users.your-user = {
+    isNormalUser = true;
+    extraGroups = [ "wheel" "video" "input" "networkmanager" "ydotool" ];
+    # Generate YOUR hash with `mkpasswd -m yescrypt` (nixpkgs#mkpasswd) and
+    # paste it here — the value is world-readable in /nix/store, which is
+    # safe for a hash but not for a plaintext password.
+    initialHashedPassword = "$y$j9T$PASTE-YOUR-HASH-HERE";
+  };
+
+  home-manager.users.your-user = {
+    home.username = "your-user";
+    home.homeDirectory = "/home/your-user";
+    home.stateVersion = "26.05";
+    omarchy.enable = true;
+  };
+
+  system.stateVersion = "26.05";
+}
+```
+
+The module whitelists the unfree default apps (Obsidian and Superwhisper), so
+`nixpkgs.config.allowUnfree` is not needed. `example/configuration.nix` is a
+complete, runnable consumer (wired in-repo as `nixosConfigurations.example`)
+you can build as a VM:
+
+```bash
+nix build .#nixosConfigurations.example.config.system.build.vm
+QEMU_OPTS="-device virtio-gpu-pci" ./result/bin/run-nixos-vm
+```
+
+The module enables `services.openssh` by default (`mkDefault`) with
+keys-only logins (`PasswordAuthentication` and
+`KbdInteractiveAuthentication` default to false). Rationale: applying
+omarchy with `nixos-rebuild switch` rebuilds the whole activation from
+your config, so if nothing enables sshd, the switch silently removes the
+running sshd, which is an unrecoverable lockout on a box you administer
+remotely; keys-only keeps a weak or documented local password from being
+SSH-able over the LAN. Both are plain `mkDefault`s: set
+`services.openssh.enable = false;` on a console-only machine, or
+`services.openssh.settings.PasswordAuthentication = true;` if you really
+want password logins.
+
+Other security-relevant defaults mirror upstream on purpose:
+NOPASSWD sudo covers only upstream's `timedatectl set-timezone <zone>`
+rule (runtime timezone changes fight the declarative `time.timeZone` —
+the rebuild wins); there is no NOPASSWD `tzupdate` and no
+`nix.settings.trusted-users` grant for `@wheel`, since both would let any
+process running as a wheel user reach root without the password (the
+Hyprland Cachix works from the system-level substituter settings
+alone, and `omarchy.hyprlandCache.enable = false` drops that
+third-party cache and its key); the lock-screen PAM stack keeps upstream's `nullok`
+(accounts without a password unlock with an empty one); and SDDM
+autologin uses `relogin = true` (see `omarchy.autologin.user` in
+[`docs/options.md`](docs/options.md)).
+
+### Installing and updating (the NixOS way)
+
+Super+Space → Install/Remove works the upstream way: pick an entry and the
+system rebuilds in front of you. Known catalog entries (browsers, editors,
+terminals, gaming, AI, dev toolchains, services) map to opinionated nixpkgs
+choices; Install → Package is a free fzf search over nixpkgs. Choices land in
+`omarchy-packages.json` next to your flake and are folded into the system
+declaratively at rebuild. Removing works the same way. Entries with no
+NixOS analogue (AUR, ONCE) are removed from the menu outright; NordVPN
+stays out until a stable channel carries both the package and the module
+(re-verified 2026-09-13 against `nixos-26.05` HEAD `21a67dc4`: neither
+exists there — they are on `nixos-unstable` only); dev-env
+entries without a catalog mapping (laravel/symfony/phoenix) show a
+declarative note. Update → Omarchy still runs flake update +
+rebuild.
+
+One wiring step is required: point the module at that JSON **inside your
+flake** (flake evaluation is pure; absolute paths like
+`/etc/nixos/omarchy-packages.json` are invisible to it):
+
+```nix
+omarchy.managedPackagesFile =
+  if builtins.pathExists ./omarchy-packages.json
+  then ./omarchy-packages.json
+  else null;
+```
+
+The `pathExists` guard keeps evaluation working before the first menu
+install. For git-based flakes the add/remove scripts register the JSON with
+`git add -N` automatically, so the flake snapshot can see it. A non-null
+but missing (or unparseable) file fails evaluation loudly with the file
+path — silently falling back to empty sets would drop menu-installed
+packages on the next rebuild.
+
+**Install → Package also searches NixOS options** (`omarchy-nix-search`):
+one picker over nixpkgs packages and every NixOS option of this machine's
+own nixpkgs (the module pins `nix.nixPath` to the running system's source,
+so the index can never offer an option this system cannot evaluate).
+Booleans get a true/false prompt, enums a choice prompt, everything else a
+validated JSON prompt — and options are only written where they can be
+written honestly; anything JSON cannot express is skipped with its
+metadata instead. A pick lands as `opt:<option.path>=<value>` in
+`omarchy-nix-add`, which writes `<flake>/omarchy-options.json` (data) and
+a one-time loader `omarchy-options.nix` next to it — same locked
+transaction, same hash-checked rollback as the packages JSON. The module
+cannot fold that file itself (the module system forbids config whose key
+set depends on data), so the loader does the fold, and it needs one import
+line in your flake:
+
+```nix
+imports = [ omarchy-nix.nixosModules.default ]
+  ++ (if builtins.pathExists ./omarchy-options.nix
+       then [ ./omarchy-options.nix ] else [ ]);
+```
+
+Until you add that line, option picks are still recorded (and rolled back
+with everything else on a failed rebuild), but they do not reach the
+evaluation — nothing applies silently; the file is there to import. `omarchy-nix-remove` lists option
+paths alongside packages and features.
+
+All NixOS-specific commands (update, add, remove, presence checks, search)
+share one resolver for the consumer flake: `$OMARCHY_NIX_FLAKE` (either a
+directory containing `flake.nix` or the path to the `flake.nix` file itself,
+which must be named exactly `flake.nix`), then `~/omarchy-nix`,
+`~/Projects/omarchy-nix`, `/etc/nixos`. In the fallback order the first
+candidate that provides `nixosConfigurations."$(hostname)"` wins. A
+candidate is skipped only when its `nixosConfigurations` evaluate cleanly
+but have no entry for this host (e.g. a bare omarchy-nix library clone
+pulled for updates). An evaluation failure keeps the candidate instead of
+silently skipping it. An explicit `OMARCHY_NIX_FLAKE` that is invalid fails
+with diagnostics rather than falling back to another checkout.
+
+`omarchy update` rebuilds with **`boot`, not `switch`, by default**: a
+`switch` on a large nixpkgs jump legitimately restarts the user session
+(pipewire, portals, uwsm plumbing), which kills the updater itself — it runs
+attached to a terminal inside that session — and silently skips every
+post-rebuild step (migrations, post-update hooks, status, the reboot
+prompt). `boot` never touches running units; the reboot prompt at the end of
+the update activates the new generation atomically. Set
+`OMARCHY_NIX_REBUILD_CMD=switch` to restore live activation for small
+updates. `omarchy-nix-add`/`omarchy-nix-remove` keep `switch` — their delta
+rarely restarts the session.
+
+### What `omarchy.enable = true` does
+
+System (NixOS module): the vendored upstream tree on the system profile
+with `OMARCHY_PATH` set as a session variable (deliberately the stable
+system-profile path, so every lookup re-resolves the active generation —
+the same semantics as upstream's static `/usr/share/omarchy`; a
+store-path value would freeze the tree at login and make the update
+flow's post-rebuild steps read stale migrations), the full upstream default
+package set from nixpkgs (foot, neovim, btop, lazygit, chromium, nautilus,
+libreoffice, dev toolchains, fonts, …) plus the 21
+upstream-owned packages packaged by this flake (aether, omacut, omawrite,
+omacalc, omasnap, monologue, hype, owe, try, asdcontrol, yaru-theme,
+hyprland-guiutils, hyprland-preview-share-picker, omarchy-nvim, herdr, ttfx,
+disktree, gliff, superwhisper, signed, omarchy-hyprland-titlebars), the parity services (avahi, printing,
+docker, gnome-keyring, fwupd, upower,
+…, all `mkDefault`), a uwsm-managed Hyprland session (≥0.56 for the
+Lua config), default SDDM, PipeWire/NetworkManager/Bluetooth daemons, the
+Omarchy Plymouth boot splash, and the Omarchy SDDM login theme + Hyprland
+greeter.
+
+The package ships 8 upstream user units. The USB/Thunderbolt approval
+feature was fully reverted upstream and in this port; configure USB
+policy with `services.usbguard`, and Thunderbolt with the existing native
+`services.hardware.bolt` service.
+
+Per-user (Home-Manager module): seeds `~/.config/hypr/hyprland.lua` (the
+entry point that dispatches into `$OMARCHY_PATH`), the user-editable stub
+files the entry point `require()`s, the quickshell `shell.json`, the
+omarchy-nvim LazyVim starter (`~/.config/nvim`), and the default theme
+rendered into `~/.local/state/omarchy/current/theme`, all as mutable
+copies: user edits (and upstream tooling writes, e.g. theme switches)
+survive rebuilds. A missing `~/.bashrc` gets upstream's default, which
+sources `$OMARCHY_PATH/default/bash/rc` (aliases, functions, starship,
+zoxide, fzf key bindings). An existing one, including a Home-Manager
+`programs.bash` link, is never touched; add
+`source "$OMARCHY_PATH/default/bash/rc"` to it to get the same setup. It
+also keeps the package-owned `omarchy` agent skill
+linked into Agents, Claude, Codex, Pi, Gemini, and Hermes on every
+activation, so links follow the active Nix store generation after
+updates. Real, user-owned
+files or directories at those link paths are never overwritten:
+activation moves them aside to `<path>.hm-backup-<timestamp>` first
+(existing symlinks are simply adopted).
+
+Fresh users run Superwhisper's per-user setup as an explicit first-run
+step. Its launcher and plugin links follow the active system generation.
+Migration `1791479273` preserves Voxtype for existing dictation users;
+Setup → Defaults → Dictation selects and initializes either backend.
+
+See [`docs/options.md`](docs/options.md) for the full `omarchy.*` option
+reference, and [`docs/install.md`](docs/install.md) for the fresh-install
+walkthrough (graphical ISO with the Calamares installer and "No Desktop",
+then wire the flake, `nixos-rebuild switch`, reboot into the desktop).
+
+### Fish shell (opt-in)
+
+The default shell stays Bash, exactly like upstream. To opt a user into the
+vendored [omarchy-fish](https://github.com/omacom/omarchy-fish) profile
+(+ fzf.fish v10.3):
+
+```nix
+omarchy.fish.enable = true;           # installs fish + the Omarchy vendor profile
+users.users.alice.shell = pkgs.fish;  # login shell is your explicit account setting
+```
+
+Fish picks the profile up from the system profile's `share/fish/vendor_*`
+directories; nothing is written to `~/.config/fish`, and functions you place
+in `~/.config/fish/functions/` override the vendor ones. The profile carries
+the Quattro bash-parity helpers (`cy`, `mup`, `rsw`, `lsw`, `dsw`, `tds`),
+the current `omarchy` completion contract and a lazy `try` integration. It
+is pinned to the fork rev carrying
+[omacom/omarchy-fish#7](https://github.com/omacom/omarchy-fish/pull/7)
+until an upstream release includes that PR.
+
+## Testing
+
+Desktop acceptance runs under `nix flake check`; all 46 checks, including
+the four VM tests, pass for the October 22 snapshot:
+
+```bash
+nix flake check                # every check: the 4 VM tests (desktop, ux, fish,
+                               # sddm) plus the eval/build checks in tests/checks/
+nix build .#checks.x86_64-linux.omarchy-desktop.driver   # just the test driver
+```
+
+For a manual VM:
+
+```bash
+nix build .#nixosConfigurations.demo.config.system.build.vm --out-link result-vm
+QEMU_OPTS="-device virtio-gpu-pci" ./result-vm/bin/run-nixos-vm
+```
+
+See [`docs/vm.md`](docs/vm.md) for the full VM testing path and known QEMU
+limitations.
+
+## Project layout
+
+```
+flake.nix              # inputs + outputs (packages, modules, checks, configs)
+config.nix             # omarchy.* option schema
+pkgs/                  # vendoring + themes + 21 upstream-owned packages:
+  omarchy.nix          #   the upstream tree -> $out/share/omarchy
+  plymouth-omarchy-theme.nix sddm-omarchy-theme.nix yaru-theme.nix
+  aether.nix asdcontrol.nix omacalc.nix omacut.nix omawrite.nix omasnap.nix
+  monologue.nix hype.nix owe.nix
+  disktree.nix gliff.nix superwhisper.nix
+  signed.nix omarchy-hyprland-titlebars.nix
+  try.nix hyprland-guiutils.nix hyprland-preview-share-picker.nix
+  omarchy-nvim.nix omarchy-fish.nix ttfx.nix herdr.nix herdr-zig-deps.nix
+  quickshell.nix       #   quickshell 0.3.2.r7.g2b4501a pin + load/reload patches
+  claude-desktop.nix claude-desktop-launcher.sh zcode-desktop.nix omp.nix
+                       #   flake-owned Install-menu apps (omarchy.ownedPackages)
+  omarchy-icons/       #   icon-font glyph injection for app launchers
+  omarchy-catalog.nix  #   Install/Remove menu catalog (nix-catalog.json)
+  omarchy-migrations.nix + migrations-nix/  # migration classes + NixOS adapters
+  omarchy-etc-manifest.nix omarchy-runtime-manifest.nix  # fail-closed manifests
+modules/nixos/         # NixOS module: env, runtime deps, services, Hyprland, themes
+modules/home-manager/  # HM module: per-user config seeds (mutable)
+skills/omarchy/        # NixOS-native end-user agent skill (packaged + linked by HM)
+tests/                 # VM tests: desktop.nix (stack), ux.nix (behavioral),
+                       # fish.nix, sddm.nix (login path); probe-quickshell-
+                       # reload.nix (manual probe, evaluated by a check);
+                       # fixtures/ (consumer-state JSON, QML exec-site list)
+tests/checks/          # flake checks: one file per check, wired by default.nix
+example/               # demo consumer configuration.nix
+docs/                  # install.md, options.md, UPSTREAM.md, vm.md,
+                       # nix-best-practices.md
+```
+
+## Updating upstream
+
+```bash
+nix flake lock --update-input omarchy-src
+nix flake check
+```
+
+Commit `flake.lock` together with any adaptation fixes the new upstream rev
+requires. One revision, one commit. Follow the full bump checklist in
+[`docs/UPSTREAM.md`](docs/UPSTREAM.md); `--replace-fail` patches fail
+loudly when upstream shifts under them.
+
+## Contributing
+
+This GitHub repository is the project's **public home**. Development
+happens in a separate canonical repository (protected `main`; every
+change lands through a PR that must pass CI, including the VM acceptance
+tests). After each merge, a squashed snapshot of `main` is published
+here — so this mirror's history carries no individual commits or merge
+points, and PRs cannot be merged directly on GitHub (the next snapshot
+publish would orphan the merge).
+
+**PRs from outside contributors are welcome anyway.** A PR opened here is
+**ported to the canonical repository with authorship preserved** — your
+commit, your author line, plus a "Ported from mirror PR #N" trailer —
+goes through the same CI, and merges like any other PR; the mirror PR is
+then closed with a pointer to the landed change. The changelog (full
+history in [`CHANGELOG.md`](CHANGELOG.md)) and the credits below record
+such contributions.
+
+Contributions landed so far:
+
+<!-- Rendered as an explicit table (avatars resolve from GitHub profile
+     URLs): GitHub's native "Contributors" list counts committers on the
+     default branch, and this mirror only receives squash snapshots
+     published under one identity — ported authors would never appear
+     there. -->
+| Contributor | Landed contributions |
+| --- | --- |
+| <a href="https://github.com/madebydamo"><img src="https://github.com/madebydamo.png" width="44" valign="middle" alt="@madebydamo" /></a> **[@madebydamo](https://github.com/madebydamo)** | Resolving nested nixpkgs attribute paths from `omarchy-packages.json` ([#2](https://github.com/zicochaos/omarchy-nix/pull/2)); searching NixOS application dirs in `omarchy-launch-webapp` ([#3](https://github.com/zicochaos/omarchy-nix/pull/3)); putting `omarchy-shell`/`qs`/`jq` on the `omarchy-sleep-lock` unit PATH so the lock request reaches the shell before suspend ([#5](https://github.com/zicochaos/omarchy-nix/pull/5)) |
+| <a href="https://github.com/VirtualMachinist"><img src="https://github.com/VirtualMachinist.png" width="44" valign="middle" alt="@VirtualMachinist" /></a> **[@VirtualMachinist](https://github.com/VirtualMachinist)** | Ordering NetworkManager before the graphical session, fixing the quickshell network-panel race at session start ([#4](https://github.com/zicochaos/omarchy-nix/pull/4)) |
+
+## License
+
+MIT, same as upstream Omarchy (upstream copyright: David Heinemeier
+Hansson and Omarchy contributors). One exception:
+[`docs/nix-best-practices.md`](docs/nix-best-practices.md) is a copy of
+the nix.dev best-practices guide, CC-BY-SA-4.0 (see its header).

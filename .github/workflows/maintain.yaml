@@ -1,0 +1,18 @@
+name: Maintain Flake
+on:
+  workflow_dispatch:
+  schedule:
+    # 04:15 UTC daily
+    - cron: '15 4 * * *'
+
+permissions: {}
+
+jobs:
+  maintain:
+    uses: kleinbem/actions/.github/workflows/maintain-flake.yaml@f1b4f5fc52ea31b1f9e53ca29170570fe4651c7d # v1.7.1
+    with:
+      nix-path: nixpkgs=channel:nixos-unstable
+      validate: nix flake check --no-build
+    secrets:
+      app-id: ${{ secrets.APP_ID }}
+      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}

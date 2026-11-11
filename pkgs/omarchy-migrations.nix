@@ -1,0 +1,400 @@
+# Classification of upstream Omarchy migrations for NixOS.
+#
+# Every file shipped under $out/share/omarchy/migrations/*.sh MUST have a key
+# here (enforced by checks.omarchy-migrations). Classes:
+#
+#   "skip"      — Arch/pacman/limine/snapper-specific, already covered
+#                 natively by the NixOS module, or N/A on a NixOS install.
+#                 Never executed; the marker is written so the migration is
+#                 not retried on every update.
+#   "user-safe" — touches only $HOME or `systemctl --user`; executed as-is.
+#   "adapter"   — upstream intent kept, mechanics rewritten for NixOS in
+#                 pkgs/migrations-nix/<name>.sh (executed INSTEAD of the
+#                 vendored script).
+#
+# When bumping omarchy-src, new vendored migrations fail the check until
+# classified here. One revision, one classification commit.
+{
+  # ---------------------------------------------------------------- adapters
+  # nvim remote clipboard repair (349ecc0): replace a known-stale provider
+  # with the fixed one from the omarchy-nvim profile path; the pacman -Q /
+  # vercmp version gate becomes a check that the packaged provider is not
+  # one of the stale versions.
+  "1788996284.sh" = "adapter";
+  # nvim remote clipboard: provider file lives in the system profile, not
+  # /usr/share/omarchy-nvim.
+  "1781587663.sh" = "adapter";
+  # tmux QoL backfill: keep the ~/.config/tmux edits + gsettings; drop the
+  # pacman hardware_packages block (covered natively on NixOS).
+  "1784401744.sh" = "adapter";
+  # yt-dlp chromium ext: the package part is declarative (module ships
+  # yt-dlp); the flags rewrite + native messaging host registration are the
+  # user-scope remainder.
+  "1780517689.sh" = "adapter";
+  # Docker launcher refresh: keep the mutable per-user desktop entry, while
+  # leaving docker group membership to users.users.<name>.extraGroups.
+  "1787580187.sh" = "adapter";
+
+  # -------------------------------------------------------------- user-safe
+  "1780057136.sh" = "user-safe"; # Shift+Enter CSI-u bindings in terminal configs
+  "1780294774.sh" = "user-safe"; # shell.json clock format via jq
+  "1781043107.sh" = "user-safe"; # theme state ~/.config/omarchy/current -> ~/.local/state
+  "1781063758.sh" = "user-safe"; # hyprland.lua bootstrap entrypoint (matches our seed)
+  "1781158082.sh" = "user-safe"; # relink nvim theme symlink
+  "1784479832.sh" = "user-safe"; # kitty listen_on socket
+  "1784508556.sh" = "user-safe"; # chromium flags: pin password-store=gnome-libsecret
+  "1784763917.sh" = "user-safe"; # Copy URL native messaging host (writes $HOME only)
+  "1784767406.sh" = "user-safe"; # rm obsolete voxtype toggle + hyprctl reload
+  "1784989000.sh" = "user-safe"; # shell.json bar layout via jq
+  "1785002349.sh" = "user-safe"; # repair nvim theme symlinks
+  "1785101000.sh" = "user-safe"; # tailscale-receive user unit (shipped), tailscale-gated
+  "1785166747.sh" = "user-safe"; # native messaging hosts for bundled chromium exts
+  "1785189600.sh" = "user-safe"; # remove tmux alert hooks + TmuxAlert indicator
+  "1785344985.sh" = "user-safe"; # shell.json bar layout via jq: insert omarchy.model-usage widget
+  #                           # (idempotent, $HOME-only; HM seeds shell.json once and never
+  #                           # refreshes it, so existing users need the in-place edit)
+  "1785543725.sh" = "user-safe"; # WhatsApp Slim ext in *-flags.conf ($HOME only)
+  "1785608166.sh" = "user-safe"; # omarchy-sleep-lock drop-in in ~/.config/systemd/user + systemctl --user
+  "1785633225.sh" = "user-safe"; # foot.ini scrollback multiplier ($HOME only)
+  # v4.0.0 wave:
+  "1785591762.sh" = "user-safe"; # WhatsApp Slim ext in brave-origin flags ($HOME only)
+  "1786098807.sh" = "user-safe"; # relink agent skill symlinks to default/agents/skills/
+  #                           # (HM manages the same links; ln -sfn is idempotent and
+  #                           # refreshes pre-HM installs)
+  "1786099804.sh" = "user-safe"; # rename model-usage bar widget -> agents via jq ($HOME)
+  "1786279107.sh" = "user-safe"; # add keyboard-layout widget to bar layout (omarchy-bar put)
+  "1786451567.sh" = "user-safe"; # repair theme symlinks (literal ~ targets, $HOME)
+  "1786517850.sh" = "user-safe"; # drop retired notification image cache ($HOME)
+  "1786549201.sh" = "user-safe"; # install the pick-a-default-agent invitation hook ($HOME)
+  "1786643346.sh" = "user-safe"; # Copy URL shortcut re-registration (Chromium profile, $HOME)
+  "1786782461.sh" = "user-safe"; # remove literal \n[text-bindings] line in foot.ini ($HOME)
+  # v4.0.1/v4.0.2 wave:
+  "1787481315.sh" = "user-safe"; # re-stage the current theme to drop installed-theme code
+  #                           # (theme staging is $HOME-only; missing theme falls back
+  #                           # to omarchy-theme-set "Tokyo Night", also $HOME)
+  "1787618700.sh" = "user-safe"; # input-device toggles: generated Lua -> plain name file
+  #                           # ($HOME/.local/state) + hyprctl reload
+  "1787843905.sh" = "user-safe"; # link omarchy agent skills into ~/.hermes/skills
+  #                           # (ln -sfn, idempotent; same model as 1786098807)
+  "1788595060.sh" = "user-safe"; # Chromium copy-url + ytdlp native messaging hosts for
+  #                           # Brave Origin ($HOME registration; browser not packaged on
+  #                           # NixOS, so the hosts simply never load)
+
+  # ------------------------------------------------------------------- skip
+  "1778623107.sh" = "skip"; # mpv-mpris via omarchy-pkg-add (pacman)
+  "1780739888.sh" = "skip"; # dua-cli/dust package swap (pacman; module concern)
+  "1781286586.sh" = "skip"; # satty->tensaku package swap (pacman; module concern)
+  "1781485962.sh" = "skip"; # guarded by Arch stock-config SHAs; never matches NixOS seeds
+  "1781793381.sh" = "skip"; # udiskie via omarchy-pkg-add (pacman; module concern)
+  "1781984677.sh" = "skip"; # snapper repair: /etc/snapper + system units (Arch)
+  "1782002156.sh" = "skip"; # retire systemd-networkd (system-level; NixOS is declarative)
+  "1782049344.sh" = "skip"; # limine-snapper notifier — never shipped on NixOS
+  "1784476564.sh" = "skip"; # mkinitcpio vconsole/LUKS layout (Arch initramfs)
+  "1784510887.sh" = "skip"; # Brave Origin beta->stable via AUR helpers
+  "1784521870.sh" = "skip"; # update-user-notify .path watcher — not shipped; notifier is native
+  "1784568652.sh" = "skip"; # mask NetworkManager-wait-online — native in the module
+  #                           # (systemd.services.NetworkManager-wait-online.enable = false)
+  "1784672586.sh" = "skip"; # quickshell-git via pacman (we ship nixpkgs quickshell)
+  # v4.0.3: 1784809451 (/etc/updatedb.conf + plocate restart) was dropped
+  # upstream, superseded by the plocate-updatedb.service.d drop-in (vendored,
+  # system unit — services.locate is native here)
+  "1784809452.sh" = "skip"; # snapper timeline cleanup (Arch/Btrfs snapper)
+  "1784818437.sh" = "skip"; # PAM fingerprint lid gate (NixOS PAM is declarative)
+  "1784909971.sh" = "skip"; # mise wrapper regen (mise model rejected — catalog is final)
+  "1784914435.sh" = "skip"; # NM wifi powersave — native in the module
+  #                           # (networking.networkmanager.wifi.powersave = false)
+  "1784917531.sh" = "skip"; # limine initramfs_async=0 kernel cmdline (Arch boot)
+  "1784960000.sh" = "skip"; # XPS speaker tuning via omarchy-pkg-add (pacman)
+  "1784961000.sh" = "skip"; # zram sysctl apply + dev-zram0.swap restart — native in the
+  #                           # module (boot.kernel.sysctl, etc/sysctl.d/99-omarchy-sysctl.conf
+  #                           # parity; zramSwap owns the device)
+  "1784970000.sh" = "skip"; # logind InhibitDelay drop-in — native in the module
+  #                           # (services.logind.settings.Login.InhibitDelayMaxSec = 15)
+  "1785013000.sh" = "skip"; # archinstall zram-generator.conf leftover (N/A on NixOS)
+  "1785090473.sh" = "skip"; # libfprint-git->libfprint via pacman
+  "1785095882.sh" = "skip"; # notify user-units switch; module enables omarchy-migrate-notify natively
+  "1785167800.sh" = "skip"; # fcitx5 supervision; module enables omarchy-fcitx5 natively
+  "1785273276.sh" = "skip"; # T2 Mac apple-bce->t2bce mkinitcpio/limine-update (Arch boot)
+  "1785351479.sh" = "skip"; # pacman -Rns kvantum/kvantum-qt5 (Arch package mutation; the intent —
+  #                           # drop kvantum from Qt theming — is applied declaratively in the
+  #                           # omarchy-src bump)
+  "1785424256.sh" = "skip"; # systemd-oomd enable (native in the module: systemd.oomd.enable
+  #                           # + vendored oomd.conf.d / app.slice.d drop-ins via environment.etc)
+  "1785511354.sh" = "skip"; # qrencode via omarchy-pkg-add (pacman; module ships qrencode)
+  "1785608251.sh" = "skip"; # ddcutil via omarchy-pkg-add (pacman; module ships ddcutil + hardware.i2c)
+  "1785617047.sh" = "skip"; # omp via mise wrapper (mise model rejected — catalog is final;
+  #                           # oh-my-pi is not in nixpkgs, menu entry hidden)
+  "1785637426.sh" = "skip"; # omacalc/gnome-calculator swap via pacman (declarative: module ships
+  #                           # omacalc and dropped gnome-calculator)
+  "1785846769.sh" = "skip"; # agent mise wrappers (mise model rejected — agents install via the
+  #                           # nix catalog: Menu > Install > AI)
+  # v4.0.0 wave:
+  "1785944594.sh" = "skip"; # T2 Mac suspend/fan defaults: limine + t2fand /etc writes (Arch boot)
+  "1786137597.sh" = "skip"; # re-runs 1785944594 (same Arch-boot target)
+  "1786181929.sh" = "skip"; # PAM env PATH for SSH commands (/etc/pam.d; NixOS owns PAM)
+  "1786273938.sh" = "skip"; # herdr install via omarchy-pkg-add + repo (declarative: module ships
+  #                           # pkgs/herdr.nix via appPackages)
+  "1786278735.sh" = "skip"; # /etc/ssh/ssh_config.d keepalive (declarative: programs.ssh, below)
+  "1786355450.sh" = "skip"; # ttfx swap via omarchy-pkg-add (declarative: appPackages)
+  "1786380259.sh" = "skip"; # /etc/bluetooth/main.conf AutoEnable + rfkill machine-wide state
+  #                           # (declarative: hardware.bluetooth + systemd-rfkill)
+  "1786386460.sh" = "skip"; # libvips via omarchy-pkg-add (declarative: module ships vips)
+  "1786391100.sh" = "skip"; # brcmfmac WPA supplicant quirk (Arch install-time fixup)
+  "1786447584.sh" = "skip"; # zbar via omarchy-pkg-add (declarative: module ships zbar)
+  "1786482992.sh" = "skip"; # Limine kernel-cmdline boot image rebuild (Arch boot)
+  "1786539345.sh" = "skip"; # crash-watch setup — the user unit is shipped + enabled natively
+  #                           # (modules/nixos default.nix block H); no runtime setup needed
+  "1786567036.sh" = "skip"; # unmask wpa_supplicant (iwd-era carryover; NixOS ships NM + supplicant)
+  "1786605598.sh" = "skip"; # initramfs rebuild for NVIDIA nouveau firmware (mkinitcpio)
+  "1786952219.sh" = "skip"; # mise -> mise-bin repo swap (mise model rejected — catalog is final)
+  "1786183928.sh" = "skip"; # regenerate mise tool wrappers (mise model rejected — catalog is final;
+  #                           # omarchy-refresh-applications itself stays user-safe)
+  # v4.0.1/v4.0.2 wave:
+  "1786719479.sh" = "skip"; # Gemini -> Antigravity via omarchy-mise-install (mise model rejected;
+  #                           # no NixOS install ever had a gemini mise wrapper or the agent file
+  #                           # set to gemini, so every branch is a no-op here)
+  "1787133200.sh" = "skip"; # qt6-imageformats via omarchy-pkg-add (declarative: module ships
+  #                           # qt6.qtimageformats for webp theme backgrounds)
+  "1787215824.sh" = "skip"; # hey via mise wrapper (mise model rejected; hey-cli not in nixpkgs)
+  "1787342993.sh" = "skip"; # ori via mise wrapper (mise model rejected; ori not in nixpkgs)
+  "1787399318.sh" = "skip"; # quickshell-git -> quickshell via pacman (module ships its own
+  #                           # quickshell pin, pkgs/quickshell.nix; upstream's switch-back to
+  #                           # the release package is what we already run)
+  "1787494718.sh" = "skip"; # FIDO2 authfile ownership in /etc/fido2 (security.pam.u2f owns the
+  #                           # authfile declaratively on NixOS)
+  "1787515927.sh" = "skip"; # browser policy dir hardening under /etc (module-owned on NixOS)
+  "1787573629.sh" = "skip"; # regenerate mise wrappers with --quiet (mise model rejected)
+  "1787589206.sh" = "skip"; # pacman SigLevel for the [omarchy] repo (pacman)
+  "1787666837.sh" = "skip"; # Dell XPS 13 sidecar amps: pkg-add + sudo apply (Arch firmware
+  #                           # tooling, dell-xps13-sidecar-amps not in nixpkgs)
+  "1787691200.sh" = "skip"; # Chromium first-run EULA seed at /usr/lib/chromium (store path is
+  #                           # immutable; nixpkgs chromium answers its own first run)
+  "1787760281.sh" = "skip"; # Hermes CLI wrapper via mise (mise model rejected; hermes not in
+  #                           # nixpkgs — its menu entries stay behind omarchy-pkg-present guards)
+  "1787815267.sh" = "skip"; # CUPS account separation: pacman + systemctl + sysusers (CUPS is
+  #                           # services.printing on NixOS)
+  "1787865477.sh" = "skip"; # drop the input group grant via gpasswd (users.users is declarative;
+  #                           # NixOS never granted input group-wide)
+  "1788009111.sh" = "skip"; # remove cups-browsed + implicitclass queues (declarative: the module
+  #                           # sets services.printing.browsed.enable = false, same v4.0.2 intent)
+  "1788025225.sh" = "skip"; # remove privileged files from retired Omarchy installers
+  #                           # (/etc/sudoers.d, /etc/systemd leftovers — never existed on NixOS)
+  "1788102906.sh" = "skip"; # Omarchy 3 legacy XCompose include + power udev rules (Omarchy 3
+  #                           # artifacts never existed on NixOS installs)
+  "1788112314.sh" = "skip"; # rc channel pacman repo pointers (pacman)
+  "1788124236.sh" = "skip"; # sshd password-auth hardening via /etc/ssh drop-in (services.openssh
+  #                           # is declarative; omarchy-setup-security-sshd is nixos-adapted)
+  "1788596255.sh" = "skip"; # vi via omarchy-pkg-add (declarative: module ships nvi as the `vi`
+  #                           # command; the pin has no `vi` attr)
+  # --- v4.0.3 wave ---
+  "1786609204.sh" = "skip"; # qt6-multimedia via omarchy-pkg-add (declarative: module ships
+  #                           # qt6.qtmultimedia — native video wallpaper playback)
+  "1787215483.sh" = "skip"; # mise settings upgrade.auto_prune (mise model rejected — catalog is
+  #                           # final)
+  "1788577553.sh" = "skip"; # cursor-agent via mise wrapper (mise model rejected; cursor-agent
+  #                           # not on the pin — setup.default.agent.cursor-agent dropped)
+  "1788619462.sh" = "skip"; # Hermes theme hand-over (hermes not in nixpkgs; pkg-present
+  #                           # self-gates to exit 0, and omarchy-theme-set-hermes is $HOME-only)
+  "1788662350.sh" = "skip"; # repair root-owned system-sleep hooks + supergfxd drop-in
+  #                           # (/usr/lib/systemd — NixOS owns system units declaratively)
+  "1788724825.sh" = "skip"; # Muse Code via mise wrapper (mise model rejected; Meta's muse is
+  #                           # NOT the nixpkgs `muse` attr — that is the MusE audio sequencer;
+  #                           # setup.default.agent.muse dropped)
+  "1788745941.sh" = "user-safe"; # Kitty config repair: stock-sha refresh via
+  #                           # omarchy-refresh-config + commenting out unrestricted
+  #                           # allow_remote_control ($HOME only)
+
+  # --- post-v4.0.3 wave (31bd80da) ---
+  "1789130779.sh" = "user-safe"; # KEF LSX II LT USB sink no-suspend wireplumber conf.d
+  #                           # ($HOME copy via omarchy-refresh-config + wireplumber
+  #                           # user-unit restart; HM seeds the same file for fresh
+  #                           # installs, so only pre-existing homes need this)
+  "1788848726.sh" = "skip"; # retire the legacy user icon font (guards on the Arch path
+  #                           # /usr/share/fonts/omarchy/omarchy.ttf; NixOS installs never ran
+  #                           # the quattro upgrader and the module ships the font declaratively)
+  "1788862626.sh" = "skip"; # Elgato Cam Link 4K v4l2 relay setup (Arch hardware fixup: system
+  #                           # units, udev trigger, setfacl)
+
+  # --- post-v4.0.3 wave (31bd80da) ---
+  "1788941927.sh" = "skip"; # basecamp-cli via mise wrapper (mise model rejected — catalog is
+  #                           # final; basecamp is not on the pin and has no menu entry)
+
+  # --- bump b679363 (2026-09-13) ---
+  "1789095456.sh" = "skip"; # Panther Lake kernel swap via omarchy-pkg-add + limine
+  #                           # rebuild (Arch kernel/boot machinery; the kernel is
+  #                           # boot.kernelPackages on NixOS, and pkg-present fails
+  #                           # for linux-ptl here, so the script's `|| exit 0`
+  #                           # no-ops it anyway)
+  "1789310715.sh" = "skip"; # cf (Cloudflare CLI) via omarchy-mise-install (mise model
+  #                           # rejected — catalog is final; not a menu entry; the
+  #                           # preinstalls-removed guard can legitimately exist via
+  #                           # omarchy-remove-preinstalls, so skip is the safe class)
+
+  # --- bump 60663fa (2026-09-19) ---
+  "1789294350.sh" = "skip"; # live-apply the BBR + fq sysctls (etc/sysctl.d/
+  #                           # 99-omarchy-sysctl.conf) — boot.kernel.sysctl owns
+  #                           # them on NixOS; the module gained the two keys in
+  #                           # this bump and nixos-rebuild applies them at boot
+  #                           # (same doctrine as 1784961000)
+  "1789325478.sh" = "skip"; # linux-omarchy default kernel + Limine BOOT_ORDER
+  #                           # (Arch kernel/boot machinery; boot.kernelPackages
+  #                           # and boot.loader.* are declarative here)
+  "1789444024.sh" = "skip"; # DKMS kernel headers repair (pacman; NixOS builds
+  #                           # matching kernel headers declaratively)
+
+  # --- bump 349ecc0 (2026-09-27) ---
+  # (1789581661, the Elsewhen plugin-link adapter, was renamed upstream to
+  # 1790042972 once Elsewhen moved into the shell; its key and adapter are gone.)
+  "1788129995.sh" = "user-safe"; # Omasnap replaces Satty/Tensaku: pkg-add/pkg-drop
+  #                           # route into the declarative stubs (omasnap ships in
+  #                           # appPackages); the imv Ctrl+E rewrite and stale
+  #                           # launcher cleanup are $HOME-only
+  "1788163635.sh" = "skip"; # revoke legacy passwordless sudo grants in
+  #                           # /etc/sudoers.d (never written on NixOS —
+  #                           # omarchy-sudo-passwordless is a declarative stub)
+  "1789764927.sh" = "adapter"; # OWE video backgrounds + lock feed: keep the
+  #                           # theme-set hook and owed.service enable, with the
+  #                           # hook sourced from the owe package instead of
+  #                           # /usr/share/owe (pkg-add is module-level)
+  "1790017600.sh" = "skip"; # retire the mise-built Hermes wrapper (mise model
+  #                           # rejected; the wrapper never existed here)
+  "1790042972.sh" = "user-safe"; # Elsewhen on the bar: shell rescan (best-effort)
+  #                           # + omarchy-bar put — the widget is now built into
+  #                           # the vendored shell
+  "1790282866.sh" = "user-safe"; # hybrid NVIDIA VA-API fix: sysfs probes +
+  #                           # omarchy-state reboot-required ($HOME)
+  "1790457067.sh" = "skip"; # loosen the offline mise Node pin (mise model
+  #                           # rejected; that config is never seeded here)
+  "1790528634.sh" = "user-safe"; # omacom.elsewhen -> omarchy.elsewhen in
+  #                           # shell.json + cache clear; its /usr/share link
+  #                           # removal never matches here (the HM module drops
+  #                           # the old store link) and pkg-drop is a stub
+  "1790539857.sh" = "skip"; # Monologue via omarchy-pkg-add (package swap is a
+  #                           # module concern: monologue ships in appPackages)
+
+  # --- bump 8b4eae6 (2026-09-30) ---
+  "1788279117.sh" = "skip"; # YT6801 ethernet: retire the yt6801-dkms vendor
+  #                           # driver for the in-kernel dwmac-motorcomm via
+  #                           # pacman + modprobe (kernel modules are
+  #                           # boot.kernelPackages on NixOS; yt6801-dkms was
+  #                           # never installed here)
+  "1790542069.sh" = "skip"; # Hype via omarchy-pkg-add (package swap is a
+  #                           # module concern: hype ships in appPackages)
+
+  # --- bump f2a39c4 (2026-10-10) ---
+  "1788256455.sh" = "skip"; # repair an Arch polkit PAM stack written by old hardware-auth
+  #                           # installers; NixOS generates PAM and never wrote that stack
+  "1788261467.sh" = "user-safe"; # seed the Secret portal backend only when no user portal
+  #                                # config exists, then restart the per-user portal
+  "1788281348.sh" = "user-safe"; # refresh theme intro assets and the session marker ($HOME)
+  "1790114905.sh" = "user-safe"; # replace only Omarchy's stale PipeWire host config ($HOME)
+  #                                # and try-restart the per-user speaker-tuning service
+  "1790397381.sh" = "skip"; # move Arch's OpenClaw seed into a self-updating user runtime;
+  #                           # NixOS keeps the catalog-installed CLI instead
+  # (1789433473/1790344599/1790608617, the USB/Thunderbolt approval setups, were
+  # fully reverted upstream together with the feature.)
+  "1790702362.sh" = "skip"; # Arch base-devel/Qt compiler packages; development tools come
+  #                           # from the Nix catalog or a consumer development shell
+  "1790702606.sh" = "skip"; # omarchy-app's makepkg/PKGBUILD templates need Nix adaptation
+  "1790863209.sh" = "skip"; # replace mise's npm Grok wrapper; that wrapper was never
+  #                           # installed here and the Nix catalog owns agent packages
+  "1791112479.sh" = "skip"; # mise reshim for account dispatch; NixOS supplies its own
+  #                           # account wrappers on the session PATH
+  "1791123731.sh" = "user-safe"; # append commented transparency examples to looknfeel.lua
+  "1791125650.sh" = "skip"; # install privileged fprintd resume hook/service drop-in;
+  #                           # fprintd and suspend behavior are declared by the NixOS module
+  "1791265613.sh" = "skip"; # Dell Panther Lake speaker firmware through an Arch hardware
+  #                           # installer; firmware is consumer-owned NixOS configuration
+  "1791345484.sh" = "user-safe"; # Disktree package swap routes into the package stubs
+  #                                # (appPackages owns it); remove stale $HOME launcher only
+  "1791376887.sh" = "user-safe"; # add OverlayScrollbar to the user's existing browser flags
+  "1791403252.sh" = "skip"; # reorder /etc/pacman.conf and upgrade Arch packages
+  "1791470456.sh" = "user-safe"; # repair bundled background WebP selections ($HOME);
+  #                                # the package patch prevents copied store modes leaking
+  "1791479273.sh" = "user-safe"; # preserve Voxtype as the configured dictation backend ($HOME)
+  "1791542175.sh" = "skip"; # Gliff via omarchy-pkg-add; appPackages owns the package
+  "1791581004.sh" = "skip"; # Limine rebuild/boot-menu verification for console kernel param;
+  #                           # NixOS builds its kernel command line and boot generations
+
+  # --- bump 33783b1 (2026-10-16) ---
+  "1786967403.sh" = "user-safe"; # drop saved workspace layouts of named workspaces ($HOME
+  #                              # + hyprctl reload)
+  "1787679775.sh" = "skip"; # mise npm lazy-install of the Kimi CLI; the mise model is
+  #                           # rejected here and Kimi is not on the nixpkgs pin
+  "1789928586.sh" = "skip"; # ARM Limine recovery packages as explicit in the pacman DB
+  "1790364978.sh" = "skip"; # GB10 system-sleep disable via an Arch sudo hardware script;
+  #                           # sleep masking is consumer NixOS configuration
+  "1790517230.sh" = "skip"; # DGX Spark UKI-less boot (efibootmgr + limine tooling)
+  "1790917415.sh" = "skip"; # ProArt P14 libinput quirk under /etc/libinput; hardware
+  #                           # quirks are consumer udev/libinput configuration here
+  "1790917571.sh" = "user-safe"; # ProArt speaker UCM reroute: systemctl --user restarts only
+  "1790917620.sh" = "skip"; # N1x pacman.conf repository ordering
+  "1790917773.sh" = "skip"; # N1x quiet console via limine-entry-tool
+  "1790950659.sh" = "skip"; # N1x Plymouth LUKS panel brightness via mkinitcpio hooks
+  "1790953795.sh" = "skip"; # ProArt reserved GPU memory via limine-entry-tool
+  "1790973240.sh" = "skip"; # ProArt speaker firmware + LV2 plugins via pkg-add; the
+  #                           # firmware is Arch packaging and audio tuning stays
+  #                           # user-selectable (omarchy-audio-tuning)
+  "1790984400.sh" = "skip"; # Dell XPS 16 reserved GPU memory via limine-entry-tool
+  "1790984500.sh" = "skip"; # N1x zram/rtkit/memory tuning via pacman + systemd system
+  #                           # units; zram is zramSwap and the sysctls are module-declared
+  "1790984600.sh" = "skip"; # N1x USB4 enable via limine-entry-tool kernel params
+  "1790984700.sh" = "skip"; # N1x GPU firmware efi_reclaim adjust (limine config sed)
+  "1791077437.sh" = "skip"; # N1x move to the linux-omarchy-n1x kernel (pacman/mkinitcpio/
+  #                           # limine throughout; kernel choice is boot.kernelPackages)
+  "1791134093.sh" = "skip"; # N1x USB4 root-port wakeup udev rule under /etc; udev rules
+  #                           # are services.udev.extraRules on NixOS
+  "1791147791.sh" = "skip"; # runtime-apply the ARP sysctls; the module ships them via
+  #                           # boot.kernel.sysctl and a rebuild/boot applies them
+  "1791152480.sh" = "skip"; # N1x rescue UKI removal + pacman hook cleanup
+  "1791367434.sh" = "user-safe"; # shared input-method defaults: pkg-add routes into the
+  #                              # declarative stub (the module ships the fcitx5 addons),
+  #                              # omarchy-input-method configure is $HOME-only
+  "1791403310.sh" = "skip"; # omarchy-hyprland-titlebars via pkg-add; the module ships the
+  #                           # plugin (omarchy.appPackages)
+  "1791408113.sh" = "skip"; # ProArt fnlock modprobe default + mkinitcpio rebuild;
+  #                           # boot.extraModprobeConfig is declarative here
+  "1791640449.sh" = "user-safe"; # keyboard-layout widget move via omarchy-bar ($HOME)
+  "1791676907.sh" = "user-safe"; # lone-Shift input-method trigger in ~/.config/fcitx5 +
+  #                              # busctl --user ReloadConfig
+  "1791696584.sh" = "user-safe"; # StartupWMClass repair in ~/.local/share/applications
+  "1791698594.sh" = "user-safe"; # workspace-layout lua rewrite ($HOME state)
+  "1791705142.sh" = "user-safe"; # window-opaque toggle for animation-off setups ($HOME;
+  #                              # the package patch prevents copied store modes leaking)
+  "1791708587.sh" = "skip"; # Signed via pkg-add; appPackages owns the package
+  "1791722809.sh" = "user-safe"; # herdr tab-bar transparency in ~/.config/herdr/config.toml
+  "1791723398.sh" = "adapter"; # nvim transparency snippets: same layout as 1781587663 —
+  #                           # the sources live in the omarchy-nvim profile, not
+  #                           # /usr/share/omarchy-nvim
+  "1791769486.sh" = "skip"; # full revert of the USB/Thunderbolt approval feature:
+  #                           # tears down usbguard/bolt state, /etc markers, limine
+  #                           # entries and pacman packages that never existed here
+  "1791784278.sh" = "skip"; # N1x GPU-memory firmware call + limine entry cleanup
+  "1791867831.sh" = "skip"; # N1x CPPC udev rule under /etc (services.udev.extraRules)
+  "1791875754.sh" = "user-safe"; # StartupWMClass appends in ~/.local/share/applications
+  "1791898365.sh" = "skip"; # limine.conf boot-menu timeout/quiet tuning (/boot)
+  "1791934674.sh" = "user-safe"; # omarchy-browser.desktop copy + hyprland-mimeapps.list
+  #                              # link routing ($HOME; package patch covers the cp)
+  "1791935188.sh" = "adapter"; # browser --no-default-browser-check: keep the $HOME
+  #                           # flags.conf appends, drop the root /etc policy writes
+  #                           # (browser policy dirs are module-owned)
+  "1791968925.sh" = "user-safe"; # shell.json tray reorder via jq ($HOME)
+  "1791969355.sh" = "user-safe"; # shell.json bar center split via jq ($HOME)
+  "1792020559.sh" = "user-safe"; # fcitx5 candidate-window theming (omarchy theme helpers)
+  "1792041364.sh" = "skip"; # Gliff on aarch64 via pkg-add; appPackages owns the package
+
+  # --- bump 3c7027d (2026-10-22) ---
+  "1791080527.sh" = "skip"; # Snapdragon camera firmware/udev provisioning; hardware remains consumer-owned
+  "1791382872.sh" = "skip"; # mise lazy shims and config rewriting; Nix catalog owns the tools
+  "1791621765.sh" = "skip"; # mkinitcpio/Limine boot-image rebuild; NixOS owns its initrd
+  "1792202836.sh" = "user-safe"; # user mpv/Chromium flags, gated on Qualcomm hardware
+  "1792259038.sh" = "user-safe"; # remembered background paths under HOME; store copies are made writable
+  "1792334754.sh" = "skip"; # OpenClaw self-updating runtime; the Nix CLI remains catalog-owned
+  "1792343099.sh" = "skip"; # removes user's Node request in favor of mise defaults not installed here
+  "1792343225.sh" = "skip"; # moves mise pruning settings to an Arch-owned system file
+  "1792345511.sh" = "skip"; # T3 package-to-AppImage conversion; retain the Nix catalog package
+  "1792359308.sh" = "skip"; # Snapdragon camera package setup; hardware remains consumer-owned
+  "1792474908.sh" = "user-safe"; # repair Brave Origin shortcut in user profiles; reuses 1786643346
+  "1792507034.sh" = "skip"; # root NetworkManager reload; native connectivity config activates at rebuild
+  "1792648436.sh" = "user-safe"; # migrate DND and retire the old notification state under HOME
+}

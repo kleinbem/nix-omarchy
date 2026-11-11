@@ -1,0 +1,355 @@
+# Migration adapters (pkgs/migrations-nix/, class "adapter"): every
+# packaged adapter runs the way omarchy-migrate runs it (bash -euo
+# pipefail) against a fake HOME, with its source present and absent
+# and with the edited config reached through a user symlink (writable:
+# a dotfile repository; read-only: a Home Manager store link). A
+# symlinked config is never replaced by a copy and a read-only one never
+# fails the run. The adapter list is pinned: a new adapter fails this
+# check until it has cases here.
+{
+  self,
+  pkgs,
+  system,
+  ...
+}:
+let
+  omarchyPkg = self.packages.${system}.omarchy;
+  nvimPkg = self.packages.${system}.omarchy-nvim;
+  # Records "<name> <args>" in $STUB_LOG; systemctl answers the OWE
+  # probes (owed.service present when OWED_PRESENT=1, no graphical
+  # session), omarchy-hw-match never matches.
+  stub = pkgs.writeShellScript "adapter-stub" ''
+    printf '%s %s\n' "''${0##*/}" "$*" >>"$STUB_LOG"
+    case "''${0##*/} $*" in
+      "systemctl --user cat owed.service") [[ ''${OWED_PRESENT:-0} == 1 ]] ;;
+      "systemctl --user is-active --quiet graphical-session.target") exit 1 ;;
+      "omarchy-hw-match "*) exit 1 ;;
+      *) exit 0 ;;
+    esac
+  '';
+in
+pkgs.runCommand "omarchy-migration-adapters-check" { } ''
+  set -euo pipefail
+  fail() { echo "FAIL: $*" >&2; [[ ! -s $TMPDIR/run.log ]] || cat "$TMPDIR/run.log" >&2; exit 1; }
+  A=${omarchyPkg}/share/omarchy/migrations-nix
+  NVIM_SOURCE=${nvimPkg}/share/omarchy-nvim/config/lua/config/remote_clipboard.lua
+  NVIM_LUALINE=${nvimPkg}/share/omarchy-nvim/config/lua/plugins/lualine-transparent.lua
+  EXT=/run/current-system/sw/share/omarchy/default/chromium/extensions
+
+  tested="1780517689.sh 1781587663.sh 1784401744.sh 1787580187.sh 1788996284.sh 1789764927.sh 1791723398.sh 1791935188.sh"
+  [[ $(ls "$A" | sort | xargs) == "$tested" ]] ||
+    fail "adapters changed ($(ls "$A" | xargs)); add their cases to this check"
+
+  STUB=$TMPDIR/stub
+  mkdir -p "$STUB"
+  for s in omarchy-install-chromium-ytdlp omarchy-restart-tmux omarchy-hw-match gsettings \
+    systemctl omarchy-hook-install; do
+    ln -s ${stub} "$STUB/$s"
+  done
+  export STUB_LOG=$TMPDIR/stub.log
+  # nvim adapters: with source = the omarchy-nvim package on PATH (as on
+  # a NixOS system, where the profile links its bin/ only)
+  WITH_NVIM=$STUB:${nvimPkg}/bin:$PATH
+  NO_NVIM=$STUB:$PATH
+
+  fresh() { H=$TMPDIR/home-$1; mkdir -p "$H/.config"; : >"$STUB_LOG"; }
+  run() { # <adapter> <PATH> [VAR=value...]
+    local adapter=$1 path=$2
+    shift 2
+    env HOME="$H" USER=tester PATH="$path" "$@" bash -euo pipefail "$A/$adapter" >"$TMPDIR/run.log" 2>&1 ||
+      fail "$adapter exited non-zero"
+  }
+  # <link> <target-content> [ro]: a config reached through a symlink
+  dotlink() {
+    mkdir -p "$(dirname "$1")" "$TMPDIR/dot"
+    local target
+    target=$(mktemp "$TMPDIR/dot/target.XXXXXX")
+    printf '%s\n' "$2" >"$target"
+    [[ ''${3:-} != ro ]] || chmod 444 "$target"
+    ln -s "$target" "$1"
+  }
+  is_link() { [[ -L $1 ]] || fail "$1 was replaced by a copy"; }
+
+  : >"$TMPDIR/ro-probe"
+  chmod 444 "$TMPDIR/ro-probe"
+  [[ ! -w $TMPDIR/ro-probe ]] || fail "the sandbox user can write read-only files; the read-only cases cannot run"
+
+  # --- 1780517689: yt-dlp extension in *-flags.conf -----------------
+  fresh flags-absent
+  run 1780517689.sh "$NO_NVIM"
+  [[ -z $(find "$H/.config" -name '*-flags.conf') ]] || fail "1780517689 created a flags file"
+  grep -q '^omarchy-install-chromium-ytdlp' "$STUB_LOG" || fail "1780517689 did not register the host"
+  fresh flags-links
+  dotlink "$H/.config/chromium-flags.conf" '--ozone-platform=wayland'
+  dotlink "$H/.config/brave-flags.conf" '--ozone-platform=wayland' ro
+  ro_before=$(cat "$H/.config/brave-flags.conf")
+  run 1780517689.sh "$NO_NVIM"
+  is_link "$H/.config/chromium-flags.conf"
+  grep -qF -- "--load-extension=$EXT/copy-url,$EXT/yt-dlp" "$H/.config/chromium-flags.conf" ||
+    fail "1780517689 did not edit through a writable symlink"
+  is_link "$H/.config/brave-flags.conf"
+  [[ $(cat "$H/.config/brave-flags.conf") == "$ro_before" ]] || fail "1780517689 changed a read-only target"
+  grep -q 'Preserving read-only symlinked' "$TMPDIR/run.log" || fail "1780517689 skipped a read-only link silently"
+  echo "1780517689 OK"
+
+  # --- 1781587663: remote clipboard provider + options.lua + tmux ----
+  setup_nvim() {
+    mkdir -p "$H/.config/nvim/lua/config"
+    printf '%s\n' 'vim.o.number = true' >"$H/.config/nvim/lua/config/options.lua"
+    chmod 644 "$H/.config/nvim/lua/config/options.lua"
+  }
+  fresh nvim-present
+  setup_nvim
+  mkdir -p "$H/.config/tmux"
+  printf '%s\n' 'set -g mouse on' >"$H/.config/tmux/tmux.conf"
+  run 1781587663.sh "$WITH_NVIM"
+  cmp -s "$NVIM_SOURCE" "$H/.config/nvim/lua/config/remote_clipboard.lua" ||
+    fail "1781587663 did not install the packaged provider (source not found?)"
+  opts=$H/.config/nvim/lua/config/options.lua
+  [[ -f $opts && ! -L $opts && $(head -n1 "$opts") == 'require("config.remote_clipboard").setup()' ]] ||
+    fail "1781587663 did not prepend the provider setup to options.lua"
+  [[ $(stat -c %a "$opts") == 644 ]] || fail "1781587663 reset options.lua to mode $(stat -c %a "$opts")"
+  grep -q ',\*:clipboard' "$H/.config/tmux/tmux.conf" || fail "1781587663 did not enable tmux clipboard forwarding"
+  find "$H/.config" -type f | sort | xargs md5sum >"$TMPDIR/before"
+  run 1781587663.sh "$WITH_NVIM"
+  find "$H/.config" -type f | sort | xargs md5sum >"$TMPDIR/after"
+  cmp -s "$TMPDIR/before" "$TMPDIR/after" || fail "1781587663 is not idempotent"
+
+  fresh nvim-absent
+  setup_nvim
+  run 1781587663.sh "$NO_NVIM"
+  grep -q 'source not found' "$TMPDIR/run.log" || fail "1781587663 without a source said nothing"
+  [[ ! -e $H/.config/nvim/lua/config/remote_clipboard.lua ]] || fail "1781587663 installed a provider without a source"
+  [[ $(cat "$H/.config/nvim/lua/config/options.lua") == 'vim.o.number = true' ]] ||
+    fail "1781587663 edited options.lua without a source"
+
+  fresh nvim-links
+  dotlink "$H/.config/nvim/lua/config/options.lua" 'vim.o.number = true'
+  dotlink "$H/.config/tmux/tmux.conf" 'set -g mouse on'
+  run 1781587663.sh "$WITH_NVIM"
+  is_link "$H/.config/nvim/lua/config/options.lua"
+  [[ $(cat "$H/.config/nvim/lua/config/options.lua") == 'vim.o.number = true' ]] ||
+    fail "1781587663 edited a symlink-managed options.lua"
+  [[ ! -e $H/.config/nvim/lua/config/remote_clipboard.lua ]] ||
+    fail "1781587663 installed into a symlink-managed config"
+  grep -q 'Preserving symlink-managed Neovim config' "$TMPDIR/run.log" || fail "1781587663 skipped silently"
+  is_link "$H/.config/tmux/tmux.conf"
+  grep -q ',\*:clipboard' "$H/.config/tmux/tmux.conf" || fail "1781587663 did not append through a writable tmux link"
+
+  fresh nvim-dir-link
+  mkdir -p "$TMPDIR/dot/nvim-dir/lua/config"
+  printf '%s\n' 'vim.o.number = true' >"$TMPDIR/dot/nvim-dir/lua/config/options.lua"
+  ln -s "$TMPDIR/dot/nvim-dir" "$H/.config/nvim"
+  dotlink "$H/.config/tmux/tmux.conf" 'set -g mouse on' ro
+  run 1781587663.sh "$WITH_NVIM"
+  is_link "$H/.config/nvim"
+  [[ ! -e $TMPDIR/dot/nvim-dir/lua/config/remote_clipboard.lua ]] ||
+    fail "1781587663 wrote into a symlinked nvim directory"
+  [[ $(cat "$H/.config/tmux/tmux.conf") == 'set -g mouse on' ]] || fail "1781587663 changed a read-only tmux target"
+  echo "1781587663 OK"
+
+  # --- 1784401744: tmux bindings backfill ----------------------------
+  old_tmux=$(printf '%s\n' 'set -g terminal-features[3] "xterm-kitty:extkeys"' '# Pane Controls' 'bind x kill-pane')
+  check_tmux() {
+    grep -qx 'set -ag terminal-features "xterm-kitty:extkeys"' "$1" &&
+      grep -q 'M-S-Enter' "$1" || fail "1784401744 did not update $1"
+  }
+  fresh tmux-absent
+  run 1784401744.sh "$NO_NVIM"
+  ! grep -q '^omarchy-restart-tmux' "$STUB_LOG" || fail "1784401744 restarted tmux without a config"
+  ! grep -q '^gsettings' "$STUB_LOG" || fail "1784401744 changed text scaling on other hardware"
+  fresh tmux-present
+  mkdir -p "$H/.config/tmux"
+  printf '%s\n' "$old_tmux" >"$H/.config/tmux/tmux.conf"
+  run 1784401744.sh "$NO_NVIM"
+  check_tmux "$H/.config/tmux/tmux.conf"
+  grep -q '^omarchy-restart-tmux' "$STUB_LOG" || fail "1784401744 did not restart tmux"
+  fresh tmux-link
+  dotlink "$H/.config/tmux/tmux.conf" "$old_tmux"
+  run 1784401744.sh "$NO_NVIM"
+  is_link "$H/.config/tmux/tmux.conf"
+  check_tmux "$H/.config/tmux/tmux.conf"
+  fresh tmux-ro-link
+  dotlink "$H/.config/tmux/tmux.conf" "$old_tmux" ro
+  run 1784401744.sh "$NO_NVIM"
+  is_link "$H/.config/tmux/tmux.conf"
+  [[ $(cat "$H/.config/tmux/tmux.conf") == "$old_tmux" ]] || fail "1784401744 changed a read-only target"
+  grep -q 'Preserving read-only symlinked tmux config' "$TMPDIR/run.log" || fail "1784401744 skipped silently"
+  echo "1784401744 OK"
+
+  # --- 1787580187: Docker launcher refresh, no account mutation -------
+  DOCKER_ROOT=${omarchyPkg}/share/omarchy
+  DOCKER_SOURCE=$DOCKER_ROOT/default/applications/Docker.desktop
+  NO_DOCKER_ROOT=$TMPDIR/no-docker-source
+  mkdir -p "$NO_DOCKER_ROOT"
+  old_docker=$(printf '%s\n' '[Desktop Entry]' 'Name=Docker' 'Exec=lazydocker' 'Type=Application')
+  setup_docker() {
+    docker_dest=$H/.local/share/applications/Docker.desktop
+    mkdir -p "$(dirname "$docker_dest")"
+    printf '%s\n' "$old_docker" >"$docker_dest"
+    chmod 644 "$docker_dest"
+  }
+  fresh docker-absent
+  run 1787580187.sh "$NO_NVIM" OMARCHY_PATH="$DOCKER_ROOT"
+  [[ ! -e $H/.local/share/applications/Docker.desktop ]] || fail "1787580187 created an absent launcher"
+
+  fresh docker-present
+  setup_docker
+  run 1787580187.sh "$NO_NVIM" OMARCHY_PATH="$DOCKER_ROOT"
+  cmp -s "$DOCKER_SOURCE" "$docker_dest" || fail "1787580187 did not refresh the launcher"
+  [[ -f $docker_dest && ! -L $docker_dest && -w $docker_dest && $(stat -c %a "$docker_dest") == 644 ]] ||
+    fail "1787580187 did not leave a writable user copy"
+  run 1787580187.sh "$NO_NVIM" OMARCHY_PATH="$DOCKER_ROOT"
+  cmp -s "$DOCKER_SOURCE" "$docker_dest" || fail "1787580187 is not idempotent"
+  [[ $(stat -c %a "$docker_dest") == 644 ]] || fail "1787580187 changed permissions on repeat"
+
+  fresh docker-source-absent
+  setup_docker
+  run 1787580187.sh "$NO_NVIM" OMARCHY_PATH="$NO_DOCKER_ROOT"
+  [[ $(cat "$docker_dest") == "$old_docker" ]] || fail "1787580187 changed a launcher without a source"
+  [[ $(stat -c %a "$docker_dest") == 644 ]] || fail "1787580187 changed permissions without a source"
+  grep -q 'source not found' "$TMPDIR/run.log" || fail "1787580187 without a source said nothing"
+
+  fresh docker-readonly
+  setup_docker
+  chmod 444 "$docker_dest"
+  run 1787580187.sh "$NO_NVIM" OMARCHY_PATH="$DOCKER_ROOT"
+  [[ $(cat "$docker_dest") == "$old_docker" && $(stat -c %a "$docker_dest") == 444 ]] ||
+    fail "1787580187 changed a read-only launcher"
+
+  fresh docker-link
+  docker_dest=$H/.local/share/applications/Docker.desktop
+  dotlink "$docker_dest" "$old_docker"
+  docker_target=$(readlink "$docker_dest")
+  docker_mode=$(stat -c %a "$docker_target")
+  run 1787580187.sh "$NO_NVIM" OMARCHY_PATH="$DOCKER_ROOT"
+  is_link "$docker_dest"
+  [[ $(readlink "$docker_dest") == "$docker_target" ]] || fail "1787580187 retargeted a user symlink"
+  cmp -s "$DOCKER_SOURCE" "$docker_target" || fail "1787580187 did not edit through a writable launcher link"
+  [[ $(stat -c %a "$docker_target") == "$docker_mode" ]] || fail "1787580187 reset a linked launcher's permissions"
+
+  fresh docker-ro-link
+  docker_dest=$H/.local/share/applications/Docker.desktop
+  dotlink "$docker_dest" "$old_docker" ro
+  docker_target=$(readlink "$docker_dest")
+  run 1787580187.sh "$NO_NVIM" OMARCHY_PATH="$DOCKER_ROOT"
+  is_link "$docker_dest"
+  [[ $(readlink "$docker_dest") == "$docker_target" && $(cat "$docker_dest") == "$old_docker" ]] ||
+    fail "1787580187 changed a read-only managed launcher link"
+  [[ $(stat -c %a "$docker_target") == 444 ]] || fail "1787580187 changed a read-only target's permissions"
+  grep -q 'Preserving read-only' "$TMPDIR/run.log" || fail "1787580187 skipped a read-only launcher silently"
+  echo "1787580187 OK"
+
+  # --- 1788996284: remote clipboard provider repair ------------------
+  # the pinned omarchy-nvim must not ship a provider this migration
+  # treats as stale (it would refuse the package forever)
+  ! grep -qF "$(sha256sum "$NVIM_SOURCE" | cut -d' ' -f1)" "$A/1788996284.sh" ||
+    fail "the packaged omarchy-nvim provider is one 1788996284 replaces"
+  provider_dir() { mkdir -p "$H/.config/nvim/lua/config"; echo "$H/.config/nvim/lua/config"; }
+  fresh repair-none
+  run 1788996284.sh "$WITH_NVIM"
+  [[ ! -e $H/.config/nvim ]] || fail "1788996284 created a provider"
+  fresh repair-current
+  cp "$NVIM_SOURCE" "$(provider_dir)/remote_clipboard.lua"
+  run 1788996284.sh "$WITH_NVIM"
+  ! grep -q 'Preserving customized' "$TMPDIR/run.log" ||
+    fail "1788996284 called the packaged provider customized (source not found?)"
+  [[ -z $(find "$H/.config/nvim" -name '*.bak.*') ]] || fail "1788996284 replaced the current provider"
+  fresh repair-custom
+  echo '-- mine' >"$(provider_dir)/remote_clipboard.lua"
+  for p in "$WITH_NVIM" "$NO_NVIM"; do
+    run 1788996284.sh "$p"
+    grep -q 'Preserving customized' "$TMPDIR/run.log" || fail "1788996284 did not preserve a customized provider"
+    [[ $(cat "$H/.config/nvim/lua/config/remote_clipboard.lua") == '-- mine' ]] ||
+      fail "1788996284 changed a customized provider"
+  done
+  fresh repair-link
+  dotlink "$H/.config/nvim/lua/config/remote_clipboard.lua" '-- mine'
+  run 1788996284.sh "$WITH_NVIM"
+  is_link "$H/.config/nvim/lua/config/remote_clipboard.lua"
+  grep -q 'Preserving symlink-managed' "$TMPDIR/run.log" || fail "1788996284 skipped a link silently"
+  echo "1788996284 OK"
+
+  # --- 1789764927: OWE user unit + theme hook ------------------------
+  fresh owe-absent
+  run 1789764927.sh "$NO_NVIM" OWED_PRESENT=0
+  grep -q 'owed.service is not installed' "$TMPDIR/run.log" || fail "1789764927 without owe said nothing"
+  ! grep -qE '^(omarchy-hook-install|systemctl --user enable)' "$STUB_LOG" ||
+    fail "1789764927 enabled OWE without the unit"
+  fresh owe-present
+  run 1789764927.sh "$NO_NVIM" OWED_PRESENT=1
+  grep -qx 'omarchy-hook-install theme-set /run/current-system/sw/share/owe/10-owe-sync' "$STUB_LOG" ||
+    fail "1789764927 did not install the theme hook"
+  grep -qx 'systemctl --user enable owed.service' "$STUB_LOG" || fail "1789764927 did not enable owed"
+  ! grep -qx 'systemctl --user start owed.service' "$STUB_LOG" ||
+    fail "1789764927 started owed without a graphical session"
+  echo "1789764927 OK"
+
+  # --- 1791723398: nvim transparency snippets from the profile --------
+  fresh trans-absent
+  run 1791723398.sh "$NO_NVIM"
+  [[ ! -e $H/.config/nvim ]] || fail "1791723398 created a config"
+
+  fresh trans-present
+  mkdir -p "$H/.config/nvim/lua/plugins" "$H/.config/nvim/plugin/after"
+  printf '%s\n' '-- existing plugins' >"$H/.config/nvim/lua/plugins/keep.lua"
+  # A transparency file the user changed is kept, not replaced.
+  printf '%s\n' '-- customized transparency' >"$H/.config/nvim/plugin/after/transparency.lua"
+  run 1791723398.sh "$WITH_NVIM"
+  cmp -s "$NVIM_LUALINE" "$H/.config/nvim/lua/plugins/lualine-transparent.lua" ||
+    fail "1791723398 did not install the packaged lualine spec"
+  [[ $(cat "$H/.config/nvim/plugin/after/transparency.lua") == '-- customized transparency' ]] ||
+    fail "1791723398 replaced a customized transparency file"
+  find "$H/.config" -type f | sort | xargs md5sum >"$TMPDIR/before"
+  run 1791723398.sh "$WITH_NVIM"
+  find "$H/.config" -type f | sort | xargs md5sum >"$TMPDIR/after"
+  cmp -s "$TMPDIR/before" "$TMPDIR/after" || fail "1791723398 is not idempotent"
+
+  fresh trans-no-source
+  mkdir -p "$H/.config/nvim/lua/plugins"
+  printf '%s\n' '-- my own Neovim profile' >"$H/.config/nvim/lua/plugins/keep.lua"
+  run 1791723398.sh "$NO_NVIM"
+  [[ ! -e $H/.config/nvim/plugin/after/transparency.lua ]] ||
+    fail "1791723398 installed a transparency file without a source"
+  [[ $(cat "$H/.config/nvim/lua/plugins/keep.lua") == '-- my own Neovim profile' ]] ||
+    fail "1791723398 touched a config without omarchy-nvim"
+
+  fresh trans-old-package
+  mkdir -p "$H/.config/nvim/lua/plugins" "$TMPDIR/old-nvim/bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$TMPDIR/old-nvim/bin/omarchy-nvim-setup"
+  chmod +x "$TMPDIR/old-nvim/bin/omarchy-nvim-setup"
+  if env HOME="$H" USER=tester PATH="$TMPDIR/old-nvim/bin:$NO_NVIM" \
+    bash -euo pipefail "$A/1791723398.sh" >"$TMPDIR/run.log" 2>&1; then
+    fail "1791723398 completed with an installed package missing its sources"
+  fi
+  grep -q 'sources not found' "$TMPDIR/run.log" || fail "1791723398 did not explain the pending migration"
+
+  fresh trans-link
+  mkdir -p "$TMPDIR/dot/nvim-dir"
+  ln -s "$TMPDIR/dot/nvim-dir" "$H/.config/nvim"
+  run 1791723398.sh "$WITH_NVIM"
+  is_link "$H/.config/nvim"
+  [[ ! -e $TMPDIR/dot/nvim-dir/plugin ]] ||
+    fail "1791723398 wrote into a symlinked nvim directory"
+  grep -q 'Preserving symlink-managed Neovim config' "$TMPDIR/run.log" ||
+    fail "1791723398 skipped a managed config silently"
+  echo "1791723398 OK"
+
+  # --- 1791935188: browser --no-default-browser-check flags -----------
+  fresh flags-none
+  run 1791935188.sh "$NO_NVIM"
+  [[ -z $(find "$H/.config" -name '*-flags.conf') ]] || fail "1791935188 created a flags file"
+
+  fresh flags-append
+  mkdir -p "$H/.config"
+  printf '%s' '--ozone-platform=wayland' >"$H/.config/chromium-flags.conf"
+  run 1791935188.sh "$NO_NVIM"
+  [[ $(cat "$H/.config/chromium-flags.conf") == $'--ozone-platform=wayland\n--no-default-browser-check' ]] ||
+    fail "1791935188 did not append the flag after a newline"
+  run 1791935188.sh "$NO_NVIM"
+  [[ $(grep -c -- '--no-default-browser-check' "$H/.config/chromium-flags.conf") == 1 ]] ||
+    fail "1791935188 appended the flag twice"
+  echo "1791935188 OK"
+
+  touch $out
+''

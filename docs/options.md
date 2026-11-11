@@ -1,0 +1,497 @@
+# `omarchy.*` option reference
+
+All options live under the `omarchy.*` namespace and are declared in
+[`config.nix`](../config.nix). They are shared by the NixOS module
+([`modules/nixos/default.nix`](../modules/nixos/default.nix)) and the
+Home-Manager module ([`modules/home-manager/default.nix`](../modules/home-manager/default.nix)):
+set them once at the system level, and the HM layer reads them from
+`osConfig.omarchy`.
+
+In Home Manager itself only `omarchy.enable` is per-user. Under NixOS the
+HM module takes `package`, `nvimPackage`, `theme`, `scale` and `monitors`
+from the system configuration; a different value set in Home Manager is
+ignored, and evaluation warns about it. Every other option configures the
+NixOS module only and warns when set in Home Manager. Standalone Home
+Manager (no NixOS module) reads those five from its own `omarchy.*`, and
+the flake's `homeModules.default` injects `package` and `nvimPackage`
+(`homeManagerModules.default` is the same module under its former name).
+`omarchy.enable = true` without any package fails evaluation with an
+assertion instead of seeding nothing.
+
+The HM module never seeds a file Home Manager itself manages (a
+`home.file`/`xdg.configFile` target or a file inside one, e.g.
+`~/.config/git/config` under `programs.git`), and only replaces a symlink
+when it points into an omarchy tree (links from old module versions);
+any other symlink belongs to someone else and stays.
+
+## Enable / package
+
+### `omarchy.enable` *(bool, default `false`)*
+
+Opt-in switch for the Omarchy system integration: the vendored upstream tree
+on the system profile, `OMARCHY_PATH`, the Quattro runtime dependencies, the
+uwsm-managed Hyprland session, default SDDM, PipeWire/NetworkManager/Bluetooth
+daemons, Plymouth boot splash, and the SDDM login theme. Importing the module
+is side-effect-free until this is `true`.
+
+### `omarchy.package` *(nullOr package, default `null`, injected by the flake)*
+
+The vendored omarchy derivation (`$out/share/omarchy`). Set automatically by
+the flake's `nixosModules.default` (and, for standalone Home Manager, by
+`homeModules.default`); leave `null` to resolve `OMARCHY_PATH` yourself.
+
+### `omarchy.plymouthPackage` *(nullOr package, default `null`, injected by the flake)*
+
+The `plymouth-omarchy-theme` derivation. Always set by the flake's
+`nixosModules.default`; the module only uses it (`boot.plymouth`) while
+`omarchy.plymouth.enable` is true, so it is not built otherwise.
+
+### `omarchy.sddmPackage` *(nullOr package, default `null`, injected by the flake)*
+
+The `sddm-omarchy-theme` derivation (login theme + Hyprland greeter config).
+Always set by the flake's `nixosModules.default`; the module only installs
+and wires it while `omarchy.sddm.theme` is true and SDDM is the display
+manager (`services.displayManager.sddm.enable`).
+
+### `omarchy.appPackages` *(listOf package, default `[]`, injected by the flake)*
+
+Upstream-owned Omarchy packages packaged by this flake because they are
+absent from nixpkgs or need a different pinned build (21): aether,
+asdcontrol, omacalc, omacut, omawrite, monologue, hype, omasnap, owe, try,
+hyprland-guiutils,
+hyprland-preview-share-picker, omarchy-nvim, yaru-theme, herdr, ttfx,
+disktree, gliff, superwhisper, signed, omarchy-hyprland-titlebars.
+Signed provides PDF signing/filling; the titlebars plugin is built
+against the pinned Hyprland. Set automatically by the flake's
+`nixosModules.default`; override to trim or
+extend the set. Entries are still subject to `omarchy.exclude_packages`
+filtering (by package name, e.g. `"owe"`).
+
+Superwhisper is the default dictation backend for fresh users and its
+per-user setup runs during first-run. The module permits its unfree
+package alongside Obsidian. Existing Voxtype users keep their backend via
+migration `1791479273`; Setup → Defaults → Dictation selects and
+initializes either backend. Superwhisper's launcher and plugin links use
+the active system profile, so they follow upgrades.
+
+### `omarchy.nvimPackage` *(nullOr package, default `null`, injected by the flake)*
+
+The `omarchy-nvim` derivation (LazyVim starter + omarchy overlay). The HM
+module runs its `omarchy-nvim-setup` script once to seed `~/.config/nvim`
+as writable copies (mutable seed-and-release, like the other user config
+stubs). The script runs in a staging directory and the result is moved
+into place only when it succeeded, so a failed seed leaves no partial
+`~/.config/nvim` behind: activation prints a warning with the script's
+output and the next activation tries again. Set automatically by the
+flake; `null` skips nvim config seeding.
+
+### `omarchy.ownedPackages` *(attrsOf package, default `{}`, injected by the flake)*
+
+Explicit packages the Install-menu catalog addresses by attribute name
+(currently `claude-desktop`, `omp`, `zcode-desktop`, `grok-cli`,
+`hermes-agent`). The managed-packages block resolves this set first, then
+consumer nixpkgs for other names, including nested paths. This keeps the
+first-party xAI Grok CLI selected even though nixpkgs carries an unrelated
+third-party client under `grok-cli`. Set automatically by the flake's
+`nixosModules.default`; override to trim or extend the set.
+
+### `omarchy.quickshellPackage` *(nullOr package, default `null`, injected by the flake)*
+
+The quickshell build the Quattro shell runs; `null` falls back to the
+consumer's `pkgs.quickshell`. The flake injects its own pin
+(`pkgs/quickshell.nix`, **0.3.2.r7.g2b4501a**, exact revision
+`2b4501a282689792b62e94f3fb30d8f512324fe6`; stable nixpkgs carries 0.3.0).
+The CLI still reports 0.3.2, so `checks.omarchy-quickshell-version`
+requires the full revision as well as the version. Both
+`load_qtquick_611.patch` (`OmarchyLoadPatch` support) and
+`intercept-rescan-fix.patch` (plugin-reload deadlock fix for Qt 6.11.2)
+are retained, with strict fuzz 0.
+
+Override only to select an equivalent build. Drop the repository pin
+only when nixpkgs supplies the equivalent snapshot and fixes, including
+`OmarchyLoadPatch` support, and desktop/reload acceptance passes. A
+numeric version alone is insufficient; the UX suite exercises the OSD,
+menu, dock and notifications after reload. Acceptance for the October 22
+snapshot is still in progress.
+
+## Shell
+
+### `omarchy.fish.enable` *(bool, default `false`)*
+
+Install Fish and the vendored Omarchy Fish profile (`omarchy-fish`, pinned
+`1.5.0-unstable-2026-09-19` — the fork tip carrying
+[omacom/omarchy-fish#7](https://github.com/omacom/omarchy-fish/pull/7)
+plus the cherry-picked bashrc-template fix from
+[omacom/omarchy-fish#11](https://github.com/omacom/omarchy-fish/pull/11),
+and fzf.fish v10.3): sets `programs.fish.enable` and adds the package
+to the system profile, whose `share/fish/vendor_*` directories Fish reads
+automatically. Does NOT change any account's login shell; that stays an
+explicit per-account setting (`users.users.<name>.shell = pkgs.fish`). Off
+by default; the Bash profile is untouched either way. User functions in
+`~/.config/fish/functions/` override the vendor ones.
+
+### `omarchy.fish.package` *(nullOr package, default `null`, injected by the flake)*
+
+The omarchy-fish derivation (vendor profile + `omarchy-setup-fish`
+informational stub). Set automatically by the flake's
+`nixosModules.default`; override to pin a different omarchy-fish revision.
+`null` with `omarchy.fish.enable = true` fails evaluation with an
+assertion.
+
+## Personal settings
+
+### `omarchy.full_name` *(strMatching `[^\r\n]*`, default `"Omarchy User"`)*
+
+Main user's full name. Used by git and the shell. CR/LF is rejected at
+evaluation time: the value lands in `environment.d(5)` and `/etc/profile`,
+where a raw newline could forge a second env assignment. Values
+are environment.d-escaped (`$` → `$$`, `\` → `\\`, `"` → `\"`) when written
+to `/etc/environment.d/50-omarchy.conf`; an empty value is omitted there
+(the systemd generator rejects empty assignments).
+
+### `omarchy.email_address` *(strMatching `[^\r\n]*`, default `"omarchy@example.com"`)*
+
+Main user's email address. Used by git. Same CR/LF rejection and
+environment.d escaping as `omarchy.full_name`.
+
+### `omarchy.timezone` *(str, default `"Etc/UTC"`)*
+
+System timezone (IANA name). Example: `"Europe/Warsaw"`.
+
+## Desktop
+
+### `omarchy.theme` *(strMatching `[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*`, default `"ethereal"`)*
+
+Default Omarchy theme name. Must match a directory under upstream `themes/`
+(or a user theme under `~/.config/omarchy/themes/<name>/`). The 23 stock
+themes: `catppuccin`, `catppuccin-latte`, `ethereal`, `everforest`,
+`flexoki-light`, `gruvbox`, `hackerman`, `kanagawa`, `last-horizon`, `lumon`,
+`lupine`, `matte-black`, `miasma`, `nord`, `osaka-jade`, `retro-82`,
+`ristretto`, `rose-pine`, `solitude`, `starship`, `tokyo-night`,
+`vantablack`, `white`.
+
+Left as a free-form string (not an enum) so users can drop their own theme
+under `~/.config/omarchy/themes/<name>/`. The character whitelist permits
+every upstream theme name while blocking path traversal and newline
+injection: no `/`, and at least one character that is not a dot, so `.`
+and `..` (the themes directory itself, or its parent) are rejected. The
+name is interpolated into filesystem paths and shell commands by the
+theme engine.
+
+Seed semantics: rendered only on the first Home-Manager activation, when
+`~/.local/state/omarchy/current/theme.name` does not exist. Later changes
+to this option are no-ops until you edit/remove that file (or run
+`omarchy-theme-set <name>` directly). A theme that fails to render (typo,
+or a user theme that cannot exist before first activation) only warns
+during activation instead of failing the whole switch.
+
+### `omarchy.terminal` *(strMatching `[A-Za-z0-9._-]+`, default `"foot"`)*
+
+Default terminal desktop entry, resolved through `xdg-terminal-exec`: the
+module writes `<value>.desktop` followed by `foot.desktop` to
+`/etc/xdg/hyprland-xdg-terminals.list`. Any desktop-entry id is accepted
+(upstream offers `foot`, `ghostty`, `alacritty`, `kitty`), but only foot is
+installed by default: install the terminal you name (Install menu or
+`environment.systemPackages`), otherwise Super+Enter falls back to foot.
+Same character whitelist as `omarchy.theme`, since the value is written
+raw (one entry per line) and a newline would forge extra entries.
+
+### `omarchy.monitors` *(listOf str, default `[]`)*
+
+Hyprland monitor directives, written to `~/.config/hypr/monitors.lua` in the
+Lua `hl.monitor({})` table format upstream uses. Empty lets Hyprland
+auto-detect (catch-all `output = ""` only). The catch-all and the
+`omarchy_gdk_scale` / `omarchy_monitor_scale` locals are always present so
+upstream runtime tooling (`omarchy-hyprland-monitor-scaling`) can persist
+user scaling changes. Example: `[ "DP-1, 2560x1440@120, 0x0, 1" ]`.
+
+Seed semantics: written only on the first Home-Manager activation, when
+`~/.config/hypr/monitors.lua` does not exist. Later changes to this option
+(and to `omarchy.scale`) are no-ops until you edit/remove that file.
+
+Entries are validated and Lua-escaped at evaluation time
+(`modules/lib/omarchy-formats.nix`) against the grammar Hyprland 0.56's
+monitor rule parser accepts: fields are
+`output, mode, position, scale, transform` (max 5, everything after output
+optional), mode must be `WIDTHxHEIGHT` or `WIDTHxHEIGHT@RATE` (or the
+`preferred`/`highres`/`highrr`/`maxwidth` keywords), position
+must be `XxY` integers or one of `auto`, `auto-right`, `auto-left`,
+`auto-up`, `auto-down`, `auto-center-right`, `auto-center-left`,
+`auto-center-up`, `auto-center-down`, scale must be `"auto"` or a number
+of at least `0.25`, transform must be `0`-`7`. `"DP-1, disable"` (or
+`disabled`) turns the output off (`disabled = true`, no further fields).
+A malformed entry fails the build with a clear error instead of writing a
+`monitors.lua` Hyprland cannot parse; quotes/backslashes/newlines in names
+can no longer break out of the Lua string literal.
+
+### `omarchy.scale` *(enum `[ 1 2 ]`, default `1`)*
+
+Display scale factor. `1` for 1x displays, `2` for 2x (HiDPI). Drives the
+generated `monitors.lua`: scale 1 → `GDK_SCALE=1`, monitor scale `auto`;
+scale 2 → `GDK_SCALE=2`, monitor scale `1.2`. An enum, not a free int: the
+template only knows these two scale profiles, so any other value now fails
+evaluation with a clear error instead of silently generating a nonsense
+config.
+
+## Packages
+
+### `omarchy.exclude_packages` *(listOf str, default `[]`)*
+
+Packages to exclude from the default runtime set, so a consumer can opt
+out of e.g. obsidian or libreoffice without forking the module. Example:
+`[ "obsidian" "libreoffice-fresh" ]`.
+
+Exact semantics: the filter applies to the **top-level entries** of the
+module's own package lists (the runtime-dependency set and
+`omarchy.appPackages`). An entry matches a package when it is
+
+- the nixpkgs **attribute path** that evaluates to that package
+  (`"libreoffice-fresh"`, `"tesseract5"`, `"qt6.qtwayland"`). Use this
+  form: it is the only one that tells apart attributes whose package name
+  differs (`libreoffice-fresh` builds `libreoffice`) or is shared (both
+  `qt5.qtwayland` and `qt6.qtwayland` are named `qtwayland`); or
+- the package's **name** (`pname`, else `name` without its version, e.g.
+  `"libreoffice"`, which also matches every entry sharing it). Kept for
+  compatibility, and the way to name `omarchy.appPackages` entries
+  (`"owe"`, `"hype"`), which are not in nixpkgs.
+
+It is **not** closure subtraction: excluding a package does not remove it
+when something else pulls it in as a dependency, and names of transitive
+dependencies do not match anything. An entry that matches no package
+produces an evaluation warning instead of silently doing nothing.
+Excluding `"chromium"` also drops the `chromium.desktop` alias the module
+builds from it; excluding `"owe"` drops its `owed` user unit.
+
+### `omarchy.managedPackagesFile` *(nullOr path, default `null`)*
+
+Path to the menu-managed package list (`omarchy-packages.json`) written by
+the Install/Remove menu actions (`omarchy-nix-add/remove`). When set, the
+module folds the JSON's `packages` into `environment.systemPackages` and
+its `features` into the matching feature blocks (steam, tailscale,
+1password, ollama, …) at evaluation time, so menu installs are declarative
+and rollback-safe. `packages` entries are nixpkgs attribute paths: a
+top-level name (`"firefox"`) or a dotted nested path
+(`"kdePackages.dolphin"`). `null` disables menu-managed packages.
+
+The `tailscale` feature also enables Omarchy's Taildrop receiver for
+graphical sessions. Its activation follows `services.tailscale.enable`,
+so an explicit `false` disables the receiver even if the feature remains
+in the JSON. A vendored `omarchy.package` is required for this user unit.
+
+There is no filesystem auto-detection: flake evaluation is pure, so
+`builtins.pathExists` cannot see absolute paths outside the flake
+(`/etc/nixos/omarchy-packages.json` is invisible). Point this at the JSON
+**inside your own flake**:
+
+```nix
+omarchy.managedPackagesFile =
+  if builtins.pathExists ./omarchy-packages.json
+  then ./omarchy-packages.json
+  else null;
+```
+
+Fail-closed: a non-null path that does not exist (or is not valid JSON)
+fails evaluation with an error naming the file — a silent fallback to
+empty sets would drop menu-installed packages on the next rebuild. The
+`pathExists` guard form above is the recommended way to express "not
+installed yet".
+
+For git-based flakes the add/remove scripts register the JSON with
+`git add -N` so the flake snapshot includes it. Where the scripts write:
+one shared resolver, `$OMARCHY_NIX_FLAKE` (a flake directory **or** the
+path to its `flake.nix` file; an invalid explicit value fails closed,
+never falls back to another checkout) → `~/omarchy-nix` →
+`~/Projects/omarchy-nix` → `/etc/nixos` (first candidate providing
+`nixosConfigurations."$(hostname)"` wins; a candidate is skipped only
+when its `nixosConfigurations` evaluate cleanly without the host entry,
+i.e. library clones, while eval failures keep it). The JSON lands at
+`<flake_dir>/omarchy-packages.json` (see README /
+docs/install.md for the full resolver contract).
+
+### Menu-set NixOS options (`omarchy-options.json` + `omarchy-options.nix`)
+
+`omarchy-nix-search` (Install → Package) searches NixOS options alongside
+nixpkgs packages. An option pick (`omarchy-nix-add
+opt:<dotted.path>=<json-value>`) writes two files next to the packages
+JSON:
+
+- `omarchy-options.json` — the data: `{"services.tailscale.enable": true}`
+  style entries, participating in the same locked transaction and
+  hash-checked rollback as `omarchy-packages.json`;
+- `omarchy-options.nix` — a generated-once loader that folds those
+  entries into `config` via `lib.setAttrByPath`. The module cannot do
+  this fold itself: the NixOS module system forbids config whose key set
+  depends on data, while a plain module reading a file can (the loader is
+  that module). The template is byte-stable, guarded by
+  `checks.omarchy-nix-transactions` against the flake's golden copy.
+
+Wiring: import the loader with a `pathExists` guard, next to the module
+import (nothing applies until this line exists — picks are recorded
+either way):
+
+```nix
+imports = [ omarchy-nix.nixosModules.default ]
+  ++ (if builtins.pathExists ./omarchy-options.nix
+       then [ ./omarchy-options.nix ] else [ ]);
+```
+
+Values are whatever `builtins.fromJSON` yields (booleans, strings,
+numbers, lists, objects); validation is the evaluation itself — an
+unknown option path or a value conflicting with your own config fails
+the rebuild, and the transaction rolls both files back. `omarchy-nix-remove`
+lists option paths alongside packages and features (option membership in
+`omarchy-options.json` wins the classification when a name could be
+either).
+
+The options half of the search index is evaluated from `<nixpkgs>`, which
+the module pins to the running system's nixpkgs source via
+`nix.nixPath = mkDefault [ "nixpkgs=<system pkgs.path>" ]` — the picker
+cannot offer an option this machine cannot evaluate, and the index
+rebuilds when that nixpkgs version changes. Override `nix.nixPath` freely;
+the search then falls back to packages-only until `<nixpkgs>` resolves.
+
+## System
+
+### `omarchy.binfmtEmulatedSystems` *(listOf str, default `[]`)*
+
+Foreign architectures to execute via qemu-user binfmt registration, wired to
+`boot.binfmt.emulatedSystems`. Upstream omarchy installs
+`qemu-user-static-binfmt` unconditionally on Arch, so cross-arch docker
+builds (`docker buildx --platform linux/arm64`) work out of the box. On
+NixOS emulation is strictly opt-in: the default `[]` registers
+no handlers and adds no qemu-user closure. Entries are NixOS system strings;
+invalid ones are rejected by `boot.binfmt.emulatedSystems`' own enum at
+evaluation time. A consumer's own `boot.binfmt.emulatedSystems` assignments
+merge with this list.
+
+```nix
+omarchy.binfmtEmulatedSystems = [ "aarch64-linux" ];
+```
+
+Removing entries and rebuilding unregisters the handlers (rollback-safe).
+
+### `omarchy.hyprlandCache.enable` *(bool, default `true`)*
+
+Register the upstream Hyprland binary cache system-wide:
+`nix.settings.substituters` (prepended), `trusted-substituters` and
+`trusted-public-keys` gain `https://hyprland.cachix.org` and its key
+`hyprland.cachix.org-1:a7pgxzMz7+chwVL3/pzj6jIBMioiJM7ypFP8PwtkuGc=`.
+The flake's Hyprland stack is not built by Hydra, so without a cache it
+compiles from source on every Hyprland bump. No `trusted-users` grant is
+needed or made. Set to `false` on hosts that must not trust a third-party
+cache; the key then signs nothing on this machine, and Hyprland builds
+locally unless one of your own substituters provides it.
+
+### `omarchy.systemTuning.enable` *(bool, default `true`)*
+
+Apply upstream's kernel, memory and I/O tuning (its `etc/sysctl.d`,
+`modprobe.d`, `udev/rules.d` and `tmpfiles.d` files). Exactly:
+
+- `boot.kernel.sysctl` (each `mkDefault`, so single keys stay
+  overridable): `net.ipv4.tcp_congestion_control = "bbr"`,
+  `net.core.default_qdisc = "fq"`, `net.ipv4.tcp_mtu_probing = 1`,
+  `vm.dirty_background_bytes = 67108864`, `vm.dirty_bytes = 268435456`,
+  `vm.dirty_writeback_centisecs = 1500`;
+- only while `zramSwap.enable` is true (the module turns it on with
+  `mkDefault`): the zram reclaim sysctls `vm.swappiness = 150`,
+  `vm.vfs_cache_pressure = 50`, `vm.page-cluster = 0`,
+  `vm.watermark_boost_factor = 0`, `vm.watermark_scale_factor = 125`,
+  and zswap switched off at boot (`systemd.tmpfiles.rules`:
+  `w! /sys/module/zswap/parameters/enabled - - - - N`). These assume a
+  swap device cheaper than re-reading the page cache, which a disk
+  swapfile is not;
+- `boot.extraModprobeConfig`: `options usbcore autosuspend=-1` (USB
+  autosuspend off);
+- `services.udev.extraRules`: the Kyber I/O scheduler on whole disks
+  (`nvme*`, `sd*`, `mmcblk*`, `vd*`).
+
+The last two are appended at normal priority (nixpkgs defines both
+options), so this switch is the only way to drop them without `mkForce`
+on the whole option. Not covered: zram swap itself (set
+`zramSwap.enable = false`) and the systemd/logind defaults.
+
+## System theme
+
+### `omarchy.plymouth.enable` *(bool, default `true`)*
+
+Enable the Omarchy Plymouth boot-splash theme (the splash that runs from
+initrd to display-manager). Sets `boot.plymouth.theme` to `"omarchy"` and
+adds the vendored theme package. Disable to keep the host's existing boot
+splash.
+
+### `omarchy.sddm.theme` *(bool, default `true`)*
+
+Apply the Omarchy SDDM login theme and Hyprland greeter config. Sets
+`services.displayManager.sddm.theme` to `"omarchy"`, installs the theme
+package, and points the Wayland greeter at Hyprland with the vendored
+greeter Lua config (`services.displayManager.sddm.wayland.compositorCommand`,
+`mkDefault`, so your own command or `sddm.settings.Wayland.CompositorCommand`
+wins). Only effective while SDDM is the display manager
+(`services.displayManager.sddm.enable`, which the module turns on with
+`mkDefault`); with another display manager nothing SDDM-related is added.
+Disable to keep the host's existing SDDM theme.
+
+## Login UX
+
+### `omarchy.autologin.user` *(nullOr str, default `null`)*
+
+Username to auto-login at the SDDM greeter into the Hyprland (uwsm) session.
+`null` (default) keeps the SDDM password prompt. The module wires the NixOS
+`services.displayManager.autoLogin.{enable,user}` + `defaultSession =
+"hyprland-uwsm"` (`mkDefault`) + `sddm.autoLogin.relogin = true`
+(`mkDefault`) from this one knob. `relogin = true` mirrors upstream: after
+logging out you are signed straight back in, so the greeter is unreachable
+for switching users; set `services.displayManager.sddm.autoLogin.relogin =
+false` to land on the greeter after logout instead.
+
+Without autologin the greeter still preselects the uwsm session: the module
+sets `services.displayManager.defaultSession = "hyprland-uwsm"` at a
+priority just below `mkDefault`, so a desktop module's own default (Plasma
+6 sets `"plasma"`) or your own value wins. The vendored theme's
+"prefer the uwsm session" logic does not fire under SDDM (its session model
+answers no display-name role), so without this the greeter would fall back
+to whichever session file sorts first.
+
+**LUKS single-password flow:** on an encrypted (LUKS) install, the user
+already typed a passphrase to unlock the root disk at boot, so a second SDDM
+prompt is redundant friction. Set `omarchy.autologin.user` there to mirror
+upstream omarchy's single-password Arch UX: unlock the disk at boot, land
+directly on the desktop. The user must exist and be PAM-permitted for
+`sddm-autologin` (which NixOS enables when `autoLogin.enable` is set).
+
+Note: this option only controls SDDM autologin; it does NOT configure LUKS
+itself. LUKS partitioning/unlocking is the user's bootstrap decision (their
+`hardware-configuration.nix` + `boot.initrd.luks`); this just makes the
+combination sensible when they did encrypt.
+
+```nix
+# On a LUKS install, after the user typed the disk passphrase at boot:
+omarchy.autologin.user = "alice";   # lands directly on the desktop
+```
+
+## Lock screen
+
+The Quickshell lock screen authenticates through two PAM services declared by
+the module: `omarchy-lock-password` (always present, upstream's faillock +
+pam_unix stack) and `omarchy-lock-fingerprint` (opt-in below). Upstream writes
+these files imperatively via `omarchy-setup-lock`; on NixOS they are
+declarative; the three upstream runtime writers
+(`omarchy-setup-lock`, `omarchy-setup-security-fingerprint`,
+`omarchy-remove-security-fingerprint`) are stubs that print a pointer here.
+Override the policy with `lib.mkForce` on
+`security.pam.services.omarchy-lock-{password,fingerprint}.text`.
+
+### `omarchy.fingerprint.enable` *(bool, default `false`)*
+
+Enable fingerprint authentication for the lock screen: turns on
+`services.fprintd` and declares the `omarchy-lock-fingerprint` PAM service
+(`auth required pam_fprintd.so`). Mirrors upstream, where the fingerprint
+service exists only after the user enrolls a finger. While enabled, the
+module defaults fprintd's stop timeout to 3 seconds and tries to restart
+it after resume; the first-run fingerprint invitation remains muted.
+
+```nix
+omarchy.fingerprint.enable = true;
+# after rebuild, enroll per user:
+#   fprintd-enroll
+```

@@ -1,0 +1,183 @@
+# omarchy-nix Agent Guide
+
+A NixOS port of [basecamp/omarchy](https://github.com/basecamp/omarchy) (the
+Quattro generation, developed on upstream's `quattro` branch; it was first
+proposed as [PR #6231](https://github.com/basecamp/omarchy/pull/6231), which
+upstream closed unmerged).
+
+> **START HERE:** read [`README.md`](README.md) and the docs in
+> [`docs/`](docs/) before any work. Process-level checks (`ps aux`,
+> `nix flake check`) are necessary but **not sufficient**: "verified" means
+> behaviorally verified in a running desktop session.
+
+## Hard rules
+
+- **This project is vendored, not rewritten.** The upstream `basecamp/omarchy`
+  tree (the `quattro` branch) is packaged as a Nix derivation; we do not
+  hand-translate bash scripts, QML, or Lua into Nix. Updating to a newer
+  Omarchy release means `nix flake lock --update-input omarchy-src` + rebuild,
+  not editing modules.
+
+## Architecture (one paragraph)
+
+Upstream Quattro's "desktop" is a **single `quickshell` process** that provides
+the bar, launcher, menus, notifications, OSDs, control panels, lock screen,
+and polkit agent as plugins, plus a **Lua-based Hyprland config** (≥0.56),
+~540 `omarchy-*` bash scripts in `bin/`, and a **TOML + template theme
+engine**. Waybar/wofi/mako/hyprlock/hyprpaper/swaybg/polkit-gnome are gone
+in Quattro. This port packages the upstream tree at `$out/share/omarchy`,
+exports `OMARCHY_PATH`, and seeds `~/.config/hypr/hyprland.lua` so Hyprland's
+autostart launches `quickshell -p $OMARCHY_PATH/shell`.
+
+## Project layout
+
+```
+flake.nix              # inputs + outputs (packages, modules, checks, configs)
+config.nix             # public omarchy.* option schema
+pkgs/                  # derivations:
+  omarchy.nix          #   vendoring: omarchy-src -> $out/share/omarchy
+  omarchy-catalog.nix  #   Install/Remove menu catalog (nix-catalog.json)
+  omarchy-migrations.nix  # migration classification manifest
+  omarchy-runtime-manifest.nix  # Arch-mutator classification (fail-closed)
+  omarchy-etc-manifest.nix      # upstream etc/ file classification
+  migrations-nix/      #   NixOS adapter scripts for class "adapter"
+  plymouth-omarchy-theme.nix  #   boot-splash theme
+  sddm-omarchy-theme.nix      #   login theme + Hyprland greeter config
+  quickshell.nix       #   quickshell 0.3.2.r7.g2b4501a pin + load/reload patches
+  *.nix                #   upstream-owned apps nixpkgs lacks (aether, owe, ...)
+                       #   and the flake-owned Install-menu apps
+modules/lib/           #   option-value validators/serializers (Lua, env.d)
+modules/nixos/         # NixOS module: env, runtime deps, Hyprland, themes
+modules/home-manager/  # HM module: per-user config seed (hypr entry + stubs)
+tests/checks/          # flake checks: one file per check, wired by default.nix
+tests/desktop.nix      # automated desktop test (checks.omarchy-desktop)
+tests/ux.nix           # behavioral acceptance (checks.omarchy-ux)
+tests/fish.nix         # fish profile acceptance (checks.omarchy-fish)
+tests/sddm.nix         # login path: SDDM greeter + autologin (checks.omarchy-sddm)
+tests/fixtures/        # consumer-state JSON, reviewed QML exec-site list
+skills/omarchy/        # NixOS-native agent skill (packaged + parity manifest)
+example/               # demo consumer configuration.nix
+CHANGELOG.md           # user-visible changes, newest first
+docs/                  # install.md, options.md, UPSTREAM.md, vm.md,
+                       # nix-best-practices.md; MAINTAINERS.md + SYSTEMS.md,
+                       # decisions/ and superpowers/ are maintainer-internal
+                       # (see the note below)
+.forgejo/workflows/    # CI lanes: fast / vm / nightly (internal)
+hosts/                 # maintainer host configs spliced into the flake (internal)
+scripts/publish-public # sanitized snapshot publisher for the GitHub mirror (internal)
+```
+
+The Install/Remove menu is NixOS-native: catalog entries (browsers,
+editors, terminals, AI agents, dev toolchains, services) resolve through
+`omarchy-nix-add`/`omarchy-nix-remove` into `omarchy-packages.json`, which
+`omarchy.managedPackagesFile` folds into the system at eval time; all the
+NixOS-specific commands share one consumer-flake resolver
+(`OMARCHY_NIX_FLAKE` → `~/omarchy-nix` → `~/Projects/omarchy-nix` →
+`/etc/nixos`). `omarchy update` keeps the upstream UX but runs
+`nix flake update` + `nixos-rebuild` against the consumer flake.
+
+## Inputs
+
+- `nixpkgs` → `nixos-26.05` (stable, so consumers on a stable NixOS install
+  do NOT get shifted to unstable by `nixos-rebuild switch --flake`).
+- `omarchy-src` → `github:basecamp/omarchy/quattro`, `flake = false` (it is not
+  a flake; we vendor it). Upstream renamed the org to `omacom/omarchy`
+  (2026-09); the old URL redirects, so the input is unchanged.
+- `hyprland` → `github:hyprwm/Hyprland`, pinned to a release commit (needs
+  ≥0.56 for the Lua config; stable nixpkgs carries 0.55). Its own nixpkgs
+  also provides `hardware.graphics.package`/`package32` (Mesa), so the
+  driver matches what Hyprland is built against.
+- `home-manager` → `github:nix-community/home-manager/release-26.05`,
+  follows `nixpkgs`.
+- `hermes-agent` → `github:NousResearch/hermes-agent` (the `hermes`
+  default-agent CLI, consumed as its own flake — it brings its own nixpkgs;
+  its home-manager input follows ours).
+- `quickshell`: this repo pins `0.3.2.r7.g2b4501a`, exact revision
+  `2b4501a282689792b62e94f3fb30d8f512324fe6` (`pkgs/quickshell.nix`,
+  injected as `omarchy.quickshellPackage`). Its CLI still reports 0.3.2;
+  `checks.omarchy-quickshell-version` checks the full revision too.
+  Upstream's `load_qtquick_611.patch` supplies the shell's required
+  `OmarchyLoadPatch` support; this port's `intercept-rescan-fix.patch`
+  avoids an engine deadlock on plugin reloads with Qt 6.11.2. Both patches
+  apply with strict fuzz 0. Hyprland stays at 0.56.2.
+  `checks.omarchy-desktop` covers shell startup, and `checks.omarchy-ux`
+  exercises the OSD, menu, dock and notifications after plugin reload.
+  Drop the pin (`pkgs/quickshell.nix`, the flake's packages entry, the
+  wrapper injection and the version check) only when nixpkgs provides an
+  equivalent snapshot and fixes, including `OmarchyLoadPatch` support,
+  and desktop/reload acceptance passes. A numeric version alone is not
+  sufficient. The October 22 snapshot passes all 46 checks, including
+  four VM tests; physical GPU verification remains pending.
+
+## Verification (every stage)
+
+1. `nix flake check` must pass before any commit. This includes
+   `checks.omarchy-desktop`, an automated NixOS test that boots a VM with
+   `virtio-gpu-pci` and asserts the full desktop stack comes up (Hyprland +
+   quickshell), and `checks.omarchy-ux`, behavioral acceptance (Super+Enter
+   opens foot, theme switching, config editability, binary coverage of every
+   menu/autostart/systemd command). Do not commit red.
+2. `nix build .#omarchy`; verify
+   `result/share/omarchy/{bin,shell,default,themes}`.
+3. For manual desktop exploration, build the demo VM and run with
+   `QEMU_OPTS="-device virtio-gpu-pci" ./result-vm/bin/run-nixos-vm`; see
+   [`docs/vm.md`](docs/vm.md).
+
+CI (`.forgejo/workflows/`, maintainer-internal) gates every push and PR
+with two lanes, both required by branch protection on `main`:
+
+- `fast`: `nix fmt -- --fail-on-change`, `nix flake check --no-build`
+  (evaluates every output, including the `example`, `demo` and host
+  `nixosConfigurations`), a build of every check that is not a VM test,
+  and `nix build .#omarchy`.
+- `vm`: the NixOS VM tests (the checks with a `driver` attribute) under
+  KVM, two at a time.
+
+Together they cover what `nix flake check` evaluates and builds; running
+it locally before a commit stays the rule. `nightly` is an input canary:
+`nix flake update` in its own checkout (nothing is committed), then the
+full `nix flake check`, the package build and
+`nix flake check --all-systems --no-build`, so upstream breakage shows up
+before the next bump.
+
+## Out of scope (do not do unless explicitly asked)
+
+- Configuring LUKS itself (partitioning, `boot.initrd.luks` devices) is
+  the user's bootstrap decision in their own `hardware-configuration.nix`.
+  The omarchy module only makes the *combination* sensible: if the user did
+  encrypt, `omarchy.autologin.user` gives the single-password UX (disk
+  unlock at boot, land directly on the desktop, mirroring upstream omarchy).
+- Translating upstream bash/QML/Lua into Nix. Vendor, don't rewrite.
+
+## Code conventions
+
+- Format with `nixfmt-tree` (the `formatter` output).
+- 2-space indent in Nix.
+- Options live under `omarchy.*`, `camelCase` keys — except the frozen
+  public API trio `full_name` / `email_address` / `exclude_packages`
+  (snake_case, kept for compatibility; do not rename).
+- Follow the Nix code conventions in
+  [`docs/nix-best-practices.md`](docs/nix-best-practices.md): quote URLs, prefer
+  `let ... in` over `rec`, avoid top-level `with` and `<...>` lookup paths,
+  pass explicit `config`/`overlays` when importing nixpkgs, use
+  `lib.recursiveUpdate` for nested merges, and `builtins.path { path, name }`
+  for reproducible source paths. (That file is a verbatim copy of the nix.dev
+  best-practices guide, CC-BY-SA-4.0; see its header.)
+
+## Updating upstream
+
+```bash
+nix flake lock --update-input omarchy-src
+nix flake check
+```
+
+Commit `flake.lock` together with any adaptation fixes the new upstream rev
+requires (renamed files, new bin scripts, new theme templates). One revision,
+one commit.
+
+---
+
+Maintainer-internal operational docs (release process, test fleet, decision
+records) live on the private dev remote and are intentionally not part of
+the public snapshot published by `scripts/publish-public` from the dev
+repository's `main`.
