@@ -1241,6 +1241,7 @@ in
         # drop mkDefault content; same-priority definitions concatenate.
         security.sudo.extraConfig = ''
           Defaults passwd_tries=10
+          Defaults timestamp_timeout=10
         '';
         security.sudo.extraRules = [
           {
