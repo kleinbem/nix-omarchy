@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 echo "Let Neovim's current line and status line show the terminal background"
 
 # NixOS adapter of 1791723398: same layout as 1781587663 — omarchy-nvim is not

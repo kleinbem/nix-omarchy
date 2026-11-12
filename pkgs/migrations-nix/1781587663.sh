@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 echo "Enable secure remote Neovim clipboard support"
 
 nvim_config_dir="$HOME/.config/nvim"

@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 echo "Stop browsers asking to be the default behind Omarchy's link routing"
 
 # NixOS adapter of 1791935188: keep the user-scope flags.conf appends; the

@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 echo "Refresh the Docker launcher for declarative Docker access"
 
 # NixOS adapter: docker group membership belongs to the consumer's

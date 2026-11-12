@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 echo "Backfill tmux settings added before Omarchy quattro"
 
 # NixOS adapter: keeps the upstream user-config edits (tmux.conf bindings,
