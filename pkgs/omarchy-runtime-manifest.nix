@@ -443,6 +443,10 @@
       class = "port-owned";
       allow = [ "pkg-helpers" ];
     };
+    omarchy-nested = {
+      class = "port-owned";
+      allow = [ ];
+    };
 
     # --- user-safe: kept verbatim; `allow` lists the audited leftovers ------
     # v4.0.3 AI wave. The Hermes DESKTOP pair is unreachable on NixOS

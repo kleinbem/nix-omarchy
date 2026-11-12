@@ -140,23 +140,14 @@ stdenv.mkDerivation (finalAttrs: {
         # Python bin scripts with a hardcoded /usr/bin/python3 shebang (dead
         # on NixOS). omarchy-file-select needs pygobject3 (gi.repository
         # Gio/GLib) — the pythonWithGi interpreter plus the GI_TYPELIB_PATH
-        # wrap in postFixup. The four agent-usage/dev-font scanners are
-        # stdlib-only and get the plain store interpreter. (Quattro v4.0.0
-        # replaced the old shell/plugins/model-usage QML providers, which
-        # exec'd a bare `python3`, with these standalone bin scripts.)
-        substituteInPlace bin/omarchy-agent-usage-claude \
-          --replace-fail '#!/usr/bin/python3' '#!${python3}/bin/python3'
-        substituteInPlace bin/omarchy-agent-usage-codex \
-          --replace-fail '#!/usr/bin/python3' '#!${python3}/bin/python3'
-        substituteInPlace bin/omarchy-agent-usage-fireworks \
-          --replace-fail '#!/usr/bin/python3' '#!${python3}/bin/python3'
-        substituteInPlace bin/omarchy-agent-usage-grok bin/omarchy-agent-account-state \
-          --replace-fail '#!/usr/bin/python3' '#!${python3}/bin/python3'
-        substituteInPlace bin/omarchy-dev-font \
-          --replace-fail '#!/usr/bin/python3' '#!${python3}/bin/python3'
-        # 33783b1 wave: the Kimi usage scanner and the agent-account
-        # transfer helper are new stdlib-only Python bin scripts.
-        substituteInPlace bin/omarchy-agent-usage-kimi bin/omarchy-agent-account-transfer \
+        # wrap in postFixup. The agent-usage/dev-font scanners are
+        # stdlib-only and get the plain store interpreter.
+        for f in bin/omarchy-agent-usage-*; do
+          if [[ $(head -n1 "$f") == '#!/usr/bin/python3' ]]; then
+            substituteInPlace "$f" --replace-fail '#!/usr/bin/python3' '#!${python3}/bin/python3'
+          fi
+        done
+        substituteInPlace bin/omarchy-dev-font bin/omarchy-agent-account-state bin/omarchy-agent-account-transfer \
           --replace-fail '#!/usr/bin/python3' '#!${python3}/bin/python3'
         # The i18n wave dispatches the stdlib-only input-methods tools
         # (configure.py / typing_setup.py) through /usr/bin/python3 by
@@ -3040,6 +3031,115 @@ stdenv.mkDerivation (finalAttrs: {
     exec omarchy-nix-add "''${args[@]}"
     EOF
     chmod +x "$dest/bin/omarchy-nix-search"
+
+    # Plymouth logo as standard desktop icon for Omarchy apps
+    install -Dm644 default/plymouth/logo.png \
+      "$out/share/icons/hicolor/256x256/apps/omarchy.png"
+
+    # Nested Hyprland desktop entry
+    mkdir -p "$out/share/applications"
+    cat >"$out/share/applications/omarchy-nested.desktop" <<'EOF'
+    [Desktop Entry]
+    Name=Omarchy (Nested)
+    GenericName=Wayland Desktop
+    Comment=Launch Omarchy Hyprland desktop in a window inside GNOME or another desktop
+    Exec=omarchy-nested
+    Icon=omarchy
+    Terminal=false
+    Type=Application
+    Categories=System;Utility;
+    Keywords=omarchy;hyprland;desktop;wayland;
+    StartupWMClass=hyprland
+    EOF
+    sed -i 's/^    //' "$out/share/applications/omarchy-nested.desktop"
+    chmod 644 "$out/share/applications/omarchy-nested.desktop"
+
+    # Nested Hyprland configuration template
+    cat >"$dest/default/hypr/nested.lua" <<'EOF'
+    -- Nested Omarchy session configuration for running inside GNOME or existing Wayland compositor
+    dofile((os.getenv("OMARCHY_PATH") or "/run/current-system/sw/share/omarchy") .. "/default/hypr/bootstrap.lua")
+
+    require("default.hypr.helpers")
+    local require_optional = require("default.hypr.require_optional")
+
+    -- Monitor for nested window: configure resolution from env or default to 2560x1440
+    local res = os.getenv("OMARCHY_NESTED_RES") or "2560x1440"
+    hl.config({
+      monitor = {
+        "WL-1," .. res .. "@60,auto,1"
+      }
+    })
+
+    -- Load Omarchy defaults
+    require("default.hypr.monitor-workspaces")
+    require("default.hypr.envs")
+    require("default.hypr.looknfeel")
+    require("default.hypr.input")
+    require("default.hypr.windows")
+
+    if _G.omarchy_default_bindings ~= false then
+      require("default.hypr.bindings.media")
+      require("default.hypr.bindings.clipboard")
+      require("default.hypr.bindings.tiling")
+      require("default.hypr.bindings.utilities")
+      require_optional.module("default.hypr.bindings.applications")
+    end
+
+    -- Custom exit and window control bindings for nested session
+    o.bind("SUPER + SHIFT + ESCAPE", "Exit nested Hyprland", hl.dsp.exit())
+    o.bind("SUPER, F", "Toggle window fullscreen", hl.dsp.fullscreen(0))
+    o.bind("SUPER + SHIFT, F", "Toggle fake fullscreen", hl.dsp.fullscreen(1))
+
+    -- Personal user overrides
+    require_optional.module("hypr.looknfeel")
+    require_optional.module("hypr.bindings")
+
+    -- Theme
+    require_optional.module("omarchy.current.theme.hyprland")
+
+    -- Autostart: Launch Omarchy Quickshell safely without clobbering host systemd/D-Bus environment
+    hl.on("hyprland.start", function()
+      local omarchy_path = os.getenv("OMARCHY_PATH") or "/run/current-system/sw/share/omarchy"
+      hl.exec_cmd("quickshell -n -p " .. omarchy_path .. "/shell")
+      hl.exec_cmd("notify-send 'Omarchy Nested' 'Running (" .. res .. ") inside Wayland host.\nPress Super+F for window fullscreen, Super+Shift+Escape to exit.'")
+    end)
+    EOF
+    sed -i 's/^    //' "$dest/default/hypr/nested.lua"
+    chmod 644 "$dest/default/hypr/nested.lua"
+
+    # omarchy-nested: launch script for nested session
+    cat >"$dest/bin/omarchy-nested" <<'EOF'
+    #!/usr/bin/env bash
+    # Launch Omarchy in a nested Hyprland window inside GNOME or an existing Wayland session
+
+    export OMARCHY_PATH="''${OMARCHY_PATH:-/run/current-system/sw/share/omarchy}"
+    export PATH="$OMARCHY_PATH/bin:$PATH"
+
+    if [[ "''${1:-}" =~ ^[0-9]+x[0-9]+$ ]]; then
+      export OMARCHY_NESTED_RES="$1"
+      shift
+    elif [[ "''${1:-}" == "--ultrawide" || "''${1:-}" == "-u" ]]; then
+      export OMARCHY_NESTED_RES="3440x1440"
+      shift
+    elif [[ "''${1:-}" == "--qhd" || "''${1:-}" == "-q" ]]; then
+      export OMARCHY_NESTED_RES="2560x1440"
+      shift
+    elif [[ "''${1:-}" == "--fhd" || "''${1:-}" == "-f" ]]; then
+      export OMARCHY_NESTED_RES="1920x1080"
+      shift
+    elif [[ -z "''${OMARCHY_NESTED_RES:-}" ]]; then
+      export OMARCHY_NESTED_RES="2560x1440"
+    fi
+
+    CONFIG="$HOME/.config/hypr/nested.lua"
+    if [[ ! -f "$CONFIG" ]]; then
+      CONFIG="$OMARCHY_PATH/default/hypr/nested.lua"
+    fi
+
+    exec hyprland -c "$CONFIG" "$@"
+    EOF
+    sed -i 's/^    //' "$dest/bin/omarchy-nested"
+    chmod +x "$dest/bin/omarchy-nested"
 
     runHook postInstall
   '';
