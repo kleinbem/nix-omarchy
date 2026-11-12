@@ -670,7 +670,7 @@ in
           SUDO_EDITOR = lib.mkDefault "\${EDITOR}";
           # See gsettingsSchemaDir above — first-run gnome-theme.sh /
           # gtk-primary-paste.sh call unwrapped gsettings.
-          GSETTINGS_SCHEMA_DIR = gsettingsSchemaDir;
+          GSETTINGS_SCHEMA_DIR = lib.mkDefault gsettingsSchemaDir;
           # Nautilus 4 loads native extension .so files ONLY from
           # NAUTILUS_4_EXTENSION_DIR (compile-time default: the nautilus
           # package's $out/lib/nautilus/extensions-4 — image-properties +
@@ -679,7 +679,7 @@ in
           # point there so HM's seeded localsend.py/transcode.py (and any
           # user extension in ~/.local/share/nautilus-python/extensions/)
           # actually load. Issue #60.
-          NAUTILUS_4_EXTENSION_DIR = "/run/current-system/sw/lib/nautilus/extensions-4";
+          NAUTILUS_4_EXTENSION_DIR = lib.mkDefault "/run/current-system/sw/lib/nautilus/extensions-4";
         };
 
         # Login-shell route for OMARCHY_USER_NAME/EMAIL (feeds
