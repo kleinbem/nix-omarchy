@@ -9,11 +9,10 @@
     # builds against its own nixpkgs, not this one).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-    # Upstream Omarchy is NOT a flake; we vendor the quattro branch tree as a
-    # derivation (see pkgs/omarchy.nix). Update with:
-    #   nix flake lock --update-input omarchy-src
+    # Upstream Omarchy is NOT a flake; we vendor the quattro tree as a
+    # derivation (see pkgs/omarchy.nix). Pinned to 3c7027d.
     omarchy-src = {
-      url = "github:omacom/omarchy/quattro";
+      url = "github:omacom/omarchy/3c7027db2a4fa9fa6a49d7af7f87c27ac48e677d";
       flake = false;
     };
 
