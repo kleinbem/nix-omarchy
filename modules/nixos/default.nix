@@ -1068,7 +1068,7 @@ in
         # swappiness 150 and page-cluster 0 assume a swap device that is
         # cheaper than re-reading page cache, which a disk swapfile is not.
         boot.kernel.sysctl = lib.mkIf cfg.systemTuning.enable (
-          lib.mapAttrs (_: lib.mkDefault) (
+          lib.mapAttrs (_: lib.mkOverride 1200) (
             {
               "net.ipv4.tcp_congestion_control" = "bbr";
               "net.core.default_qdisc" = "fq";
