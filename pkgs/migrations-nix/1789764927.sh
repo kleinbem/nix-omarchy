@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 echo "Enable OWE desktop video backgrounds and lock feed"
 
 # NixOS: owe ships through omarchy.appPackages (the module registers

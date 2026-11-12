@@ -19,7 +19,20 @@ jobs:
         with:
           nix-path: nixpkgs=channel:nixos-unstable
           free-disk-space: "true"
+          netbird-setup-key: ${{ secrets.NETBIRD_SETUP_KEY_EPHEMERAL }}
+          attic-token: ${{ secrets.ATTIC_PULL_TOKEN }}
       - name: Build omarchy package
         run: nix build -L --no-link .#packages.x86_64-linux.omarchy
-      - name: Check flake evaluation
-        run: nix flake check --no-build
+      - name: Run fast checks
+        run: >
+          nix build -L --no-link
+          .#checks.x86_64-linux.omarchy-runtime
+          .#checks.x86_64-linux.omarchy-shebangs
+          .#checks.x86_64-linux.omarchy-bash-syntax
+          .#checks.x86_64-linux.catalog-consistency
+          .#checks.x86_64-linux.omarchy-etc-parity
+          .#checks.x86_64-linux.omarchy-migration-parity
+      - name: Check demo app and metadata
+        run: |
+          nix eval --raw .#apps.x86_64-linux.demo.program
+          nix flake metadata

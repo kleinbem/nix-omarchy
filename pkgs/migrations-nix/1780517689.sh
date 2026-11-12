@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 echo "Add yt-dlp download extension (Alt+Shift+D) to Chromium-based browsers"
 
 # NixOS adapter: the package part (yt-dlp via omarchy-pkg-add) is dropped —

@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 echo "Repair remote Neovim clipboard yanks and paste"
 
 nvim_provider="$HOME/.config/nvim/lua/config/remote_clipboard.lua"
