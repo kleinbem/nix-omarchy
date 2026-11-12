@@ -411,6 +411,35 @@
         }
       );
 
+      # Nix Flake apps: allows running `nix run .#demo` or `nix run .`
+      # to launch the Omarchy desktop demo directly in a fast KVM VM.
+      apps = forAllSystems (
+        system:
+        let
+          vm = self.nixosConfigurations.demo.config.system.build.vm;
+        in
+        nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          default = {
+            type = "app";
+            program = "${vm}/bin/run-nixos-vm";
+            meta.description = "Launch Omarchy live demo in a fast KVM virtual machine";
+          };
+          demo = {
+            type = "app";
+            program = "${vm}/bin/run-nixos-vm";
+            meta.description = "Launch Omarchy live demo in a fast KVM virtual machine";
+          };
+        }
+      );
+
+      # Starter template for `nix flake init -t github:kleinbem/nix-omarchy`
+      templates = {
+        default = {
+          path = ./templates/default;
+          description = "Starter NixOS flake configuration with Omarchy desktop";
+        };
+      };
+
       nixosConfigurations = {
         # Minimal NixOS config that consumes the omarchy NixOS + Home-Manager
         # modules with `enable = true`. Used as the Stage 3/4 verification
