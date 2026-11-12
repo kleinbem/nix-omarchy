@@ -34,9 +34,10 @@
   "limine-entry-tool.d/omarchy-uki.conf" = "na"; # limine UKI toggle
   # 33783b1: mpv hardware decoding through the reliable-decoders list.
   "mpv/mpv.conf" = "vendored"; # environment.etc."mpv/mpv.conf" — mpv's system config layer (~/.config/mpv overrides)
+  "mkinitcpio.conf.d/00-omarchy-hooks.conf" = "na"; # platform-specific Arch HOOKS baseline; boot.initrd owns the NixOS initrd
+  "mkinitcpio.conf.d/i2c_hid_of_module.conf" = "na"; # Snapdragon keyboard initrd hook; NixOS initrd kernelModules covers aarch64
   "mkinitcpio.conf.d/omarchy_hooks.conf" = "na"; # Arch mkinitcpio initrd hooks — NixOS builds its own initrd
   "mkinitcpio.conf.d/omarchy_vconsole.conf" = "na"; # console layout is declared through console.* and the NixOS initrd
-  "mkinitcpio.conf.d/00-omarchy-hooks.conf" = "na"; # platform-specific Arch HOOKS baseline; boot.initrd owns the NixOS initrd
   "mkinitcpio.conf.d/thunderbolt_module.conf" = "na"; # Arch early-module probe; boot.initrd.availableKernelModules is consumer-owned, services.hardware.bolt covers userspace
   "modprobe.d/omarchy-usb-autosuspend.conf" = "native"; # boot.extraModprobeConfig (usbcore autosuspend=-1)
   "NetworkManager/conf.d/omarchy-wifi-powersave.conf" = "native"; # networking.networkmanager.wifi.powersave
@@ -51,6 +52,7 @@
   # passwordless path to root): upstream's brightness script now uses plain
   # `sudo asdcontrol` and takes the prompt. Same on NixOS.
   "sudoers.d/omarchy-passwd-tries" = "native"; # security.sudo.extraConfig (passwd_tries=10)
+  "sudoers.d/omarchy-sudo-timeout" = "native"; # security.sudo.extraConfig (timestamp_timeout=10)
   "sudoers.d/omarchy-dns" = "na"; # passwordless omarchy-dns provider switch — DNS is declarative (omarchy-dns is a stub; services.resolved / networking.nameservers)
   # 33783b1: passwordless omarchy-locale-generate for the 50-language menu;
   # NixOS generates locales declaratively (i18n.supportedLocales) and

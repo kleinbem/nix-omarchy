@@ -97,7 +97,7 @@ let
     "install.ai.claude-desktop": {"icon":"","iconFont":"omarchy","label":"Claude Desktop","disabled":"omarchy-pkg-present claude-desktop","action":"omarchy-launch-floating-terminal-with-presentation 'omarchy-nix-add install.ai.claude-desktop'"},
     "install.ai.omp": {"icon":"󱚤","label":"Oh My Pi","when":"! omarchy-pkg-present omp","action":"omarchy-launch-floating-terminal-with-presentation 'omarchy-nix-add install.ai.omp'"},
     "install.ai.hermes": {"icon":"󱚤","label":"Hermes","when":"! omarchy-pkg-present hermes","action":"omarchy-launch-floating-terminal-with-presentation 'omarchy-nix-add install.ai.hermes'"},
-    "install.ai.zcode": {"icon":"","iconFont":"omarchy","label":"ZCode","disabled":"omarchy-pkg-present z-code-bin","action":"omarchy-launch-floating-terminal-with-presentation 'omarchy-nix-add install.ai.zcode'"},
+    "install.ai.zcode": {"icon":"","iconFont":"omarchy","label":"ZCode","disabled":"omarchy-pkg-present z-code-bin","action":"omarchy-launch-floating-terminal-with-presentation 'omarchy-nix-add install.ai.zcode'"},
   '';
 in
 
@@ -246,16 +246,8 @@ stdenv.mkDerivation (finalAttrs: {
         # upstream at 33783b1 and no longer ship; their stub chains and menu
         # ids went with them — see the runtime manifest.)
 
-        # omarchy-launch-browser and omarchy-launch-webapp resolve the .desktop
-        # via a fixed brace list of data dirs. Arch has /usr/share/applications;
-        # NixOS puts system apps in /run/current-system/sw/share/applications.
-        # Add that path so chromium (and any other default) resolves after
-        # xdg-settings. Webapps used to skip the Exec= lookup and hand
-        # --app=https://… to uwsm-app as the application path.
-        substituteInPlace bin/omarchy-launch-browser bin/omarchy-launch-webapp \
-          --replace-fail \
-            '{~/.local,~/.nix-profile,/usr}/share/applications' \
-            '{~/.local,~/.nix-profile,/run/current-system/sw,/usr}/share/applications'
+        # Upstream adopted standard XDG_DATA_DIRS in bin/omarchy-launch-browser
+        # and bin/omarchy-launch-webapp, which naturally includes NixOS paths.
 
         # chromium-flags.conf seed: --load-extension points at the Arch
         # /usr/share/omarchy. Point it at the system-profile path instead —
@@ -861,14 +853,10 @@ stdenv.mkDerivation (finalAttrs: {
         chmod +x bin/omarchy-remove-security-sshd
 
         # omarchy-remove-dev-env: mise/rustup/opam arms are user-level (kept).
-        # (Post-v4.0.2 upstream replaced the two pacman arms with
-        # omarchy-pkg-drop, which this port already routes declaratively —
-        # no substitution needed anymore.) Its sudo boundary probes call
-        # /usr/bin/sudo by absolute path (349ecc0); NixOS's setuid sudo is
-        # the /run/wrappers one.
+        # Upstream uses bare sudo/rm now; substitute /run/wrappers/bin/sudo if present.
         substituteInPlace bin/omarchy-remove-dev-env \
-          --replace-fail '/usr/bin/sudo' '/run/wrappers/bin/sudo' \
-          --replace-fail '/usr/bin/rm' '${coreutils}/bin/rm'
+          --replace-quiet '/usr/bin/sudo' '/run/wrappers/bin/sudo' \
+          --replace-quiet '/usr/bin/rm' '${coreutils}/bin/rm'
 
         # omarchy-remove-launcher-entry: on NixOS a .desktop outside $HOME
         # belongs to a system package — point at omarchy-nix-remove instead of
@@ -1202,7 +1190,7 @@ stdenv.mkDerivation (finalAttrs: {
             $'source "$(dirname "''${BASH_SOURCE[0]}")/omarchy-nix-provider-path"\nexport PATH="$(omarchy_nix_provider_path)"\n\n# Remove the Nix dispatch directory before resolving the actual CLI, so exec' \
           --replace-fail $'  # A mise dispatcher can exist before its CLI or first-run installer does.\n  # Omarchy declares these agents, so installing one leaves the user\'s config\n  # alone. A user who removed the preinstalls selects it in their own config.\n  export MISE_MINIMUM_RELEASE_AGE=0\n  if omarchy-mise-default-tools declares "$provider"; then\n    mise install --quiet "$provider"\n  else\n    mise use -g --quiet "$provider"\n  fi\n  agent_binary=$(mise which "$provider")' \
             $'  echo "$provider is not installed. Use omarchy-nix-add install.ai.$provider and rebuild." >&2\n  exit 127' \
-          --replace-fail 'export PATH="''${MISE_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/mise}/command-wrappers/bin:$PATH"' \
+          --replace-fail 'PATH="$mise_data_dir/command-wrappers/bin:$PATH"' \
             'export PATH="''${OMARCHY_PATH:-/run/current-system/sw/share/omarchy}/agent-wrappers:$PATH"'
         mkdir -p agent-wrappers
         for provider in claude codex grok; do
@@ -1417,16 +1405,6 @@ stdenv.mkDerivation (finalAttrs: {
             'correct the error, and retry the update.\n\nIf you need assistance' \
             'correct the error, and retry the update.\n\nFull log: /tmp/omarchy-update.log\n\nIf you need assistance'
 
-        # Command-scoped sudo (quattro 349ecc0): omarchy-update, its sleep
-        # inhibitor and the sudo-no-update wrapper start under `bash -p`,
-        # verify the interpreter via /proc/$$/exe, and call every tool by an
-        # absolute /usr/bin path so a user PATH cannot substitute one. Keep
-        # the hardening, point it at NixOS's fixed locations: the setuid
-        # wrappers for sudo/pkexec, store paths for everything else. An
-        # unmapped /usr/bin tool fails the build instead of a live update.
-        substituteInPlace bin/omarchy-update \
-          --replace-fail 'PATH="$OMARCHY_PATH/bin:/usr/bin:/usr/sbin:/bin:/sbin"' \
-                         'PATH="$OMARCHY_PATH/bin:/run/wrappers/bin:/run/current-system/sw/bin"'
         # Upstream requires a canonical OMARCHY_PATH that literally contains
         # the entrypoint. The module's value is the stable system-profile
         # path /run/current-system/sw/share/omarchy (a root-owned symlink
@@ -1438,16 +1416,12 @@ stdenv.mkDerivation (finalAttrs: {
         # refuses a directory of symlinks to the real scripts as well as a
         # user-owned link to the store that could be re-pointed afterwards.
         substituteInPlace bin/omarchy-security-functions \
-          --replace-fail 'PATH="$wrapper_dir:$OMARCHY_PATH/bin:/usr/bin:/usr/sbin:/bin:/sbin"' \
-                         'PATH="$wrapper_dir:$OMARCHY_PATH/bin:/run/wrappers/bin:/run/current-system/sw/bin"' \
           --replace-fail \
             $'  if [[ ''${OMARCHY_PATH:-} != /* || $(/usr/bin/realpath -e -- "$OMARCHY_PATH") != "$OMARCHY_PATH" ]] ||\n    ! { [[ $command_source == "$OMARCHY_PATH/bin/$command_name" ]] ||' \
             $'  local omarchy_root\n  if [[ ''${OMARCHY_PATH:-} != /* ]] ||\n    ! omarchy_root=$(/usr/bin/realpath -e -- "$OMARCHY_PATH") ||\n    [[ $omarchy_root != /nix/store/* ]] ||\n    [[ $OMARCHY_PATH != "$omarchy_root" && $OMARCHY_PATH != /run/current-system/sw/share/omarchy ]] ||\n    ! { [[ $command_source == "$omarchy_root/bin/$command_name" ]] ||'
         for f in \
-          bin/omarchy-update \
           bin/omarchy-security-functions \
-          bin/omarchy-update-stay-awake \
-          default/omarchy/sudo-no-update/sudo
+          bin/omarchy-update-stay-awake
         do
           # Pin the interpreter the startup check compares against. sed
           # matches nothing silently, so verify: an unpinned entrypoint would
@@ -1813,8 +1787,8 @@ stdenv.mkDerivation (finalAttrs: {
         # mutate user state). Migrations handle their own dry-run internally.
         substituteInPlace bin/omarchy-update \
           --replace-fail \
-            $'  PATH="$user_path" "$OMARCHY_PATH/bin/omarchy-hook" post-update\n' \
-            $'  if [[ ''${OMARCHY_NIX_UPDATE_DRY_RUN:-} != 1 ]]; then\n    PATH="$user_path" "$OMARCHY_PATH/bin/omarchy-hook" post-update\n  fi\n'
+            $'  omarchy-hook post-update\n' \
+            $'  if [[ ''${OMARCHY_NIX_UPDATE_DRY_RUN:-} != 1 ]]; then\n    omarchy-hook post-update\n  fi\n'
 
         # Menu: Install Package / Remove Package → nix-native flows; the AUR
         # entry is deleted outright (no AUR analogue on NixOS — a dead item
@@ -2058,9 +2032,9 @@ stdenv.mkDerivation (finalAttrs: {
         # agent_* lines are rewritten and the (now unreferenced) helper is
         # left as harmless dead code.
         substituteInPlace bin/omarchy-default-agent \
-          --replace-fail 'agent_present() { user_install || mise where "$agent_package" &>/dev/null; }' \
+          --replace-fail 'agent_present() { user_install || mise where "$agent_tool" &>/dev/null; }' \
                          'agent_present() { ! omarchy-cmd-missing "$agent"; }' \
-          --replace-fail $'agent_install() {\n    user_install && return\n    if omarchy-mise-default-tools declares "$agent_package"; then\n      mise install "$agent_package"\n    else\n      mise use -g "$agent_package"\n    fi\n  }' \
+          --replace-fail $'agent_install() {\n    user_install && return\n    if omarchy-mise-default-tools declares "$agent_tool"; then\n      if npm_backed "$agent_tool"; then\n        mise install node "$agent_tool"\n      else\n        mise install "$agent_tool"\n      fi\n    else\n      if npm_backed "$agent_package" && ! mise where node &>/dev/null; then\n        mise install node || return 1\n      fi\n      if [[ ''${agent_prereleases:-} == "true" ]]; then\n        MISE_PRERELEASES=true mise use -g "$agent_package"\n      else\n        mise use -g "$agent_package"\n      fi\n    fi\n  }' \
                          'agent_install() { ! omarchy-cmd-missing "$agent" || omarchy-nix-add "install.ai.$agent"; }' \
           --replace-fail 'agent_present() { "$agent_installer" --check; }' \
                          'agent_present() { ! omarchy-cmd-missing "$agent"; }' \
@@ -2072,7 +2046,7 @@ stdenv.mkDerivation (finalAttrs: {
         # Menu icon font: the vendored font ships one glyph per app
         # (default/fonts/omarchy/README.md catalogues them, up to U+E90F).
         # ZCode's Install > AI entry carries its own mark, injected here as
-        # U+E910 so the menu renders the app's icon instead of a
+        # U+E920 so the menu renders the app's icon instead of a
         # fallback-family glyph. The mark and the injector live in
         # pkgs/omarchy-icons/; the injector keeps head.modified as vendored,
         # so the patched font is byte-reproducible.

@@ -1,5 +1,5 @@
 # Menu icon font: the vendored font ships one glyph per app
-# (U+E900..U+E90F) and this repo injects the ZCode mark U+E910
+# (U+E900..U+E91F) and this repo injects the ZCode mark U+E920
 # (pkgs/omarchy-icons/). Assert the injection and the family name,
 # so a silently unapplied postPatch, or an upstream font swap that
 # renumbers the codepoints, cannot ship a menu with missing icons.
@@ -21,10 +21,10 @@ pkgs.runCommand "omarchy-icon-font" { } ''
   upstream = TTFont("${inputs.omarchy-src}/default/fonts/omarchy/omarchy.ttf").getBestCmap()
   assert all(cmap.get(cp) == glyph for cp, glyph in upstream.items()), "injection overwrote an upstream glyph"
   assert cmap.get(0xE90F) == "tailscale", "Tailscale mark (U+E90F) missing from the menu icon font"
-  assert cmap.get(0xE910) == "zcode", "ZCode mark (U+E910) missing from the menu icon font"
+  assert cmap.get(0xE920) == "zcode", "ZCode mark (U+E920) missing from the menu icon font"
   family = font["name"].getDebugName(1)
   assert family == "omarchy", f"icon font family changed: {family}"
-  print(f"menu icon font: {len(cmap)} codepoints, U+E90F -> tailscale, U+E910 -> zcode, family {family}")
+  print(f"menu icon font: {len(cmap)} codepoints, U+E90F -> tailscale, U+E920 -> zcode, family {family}")
   '
   touch $out
 ''

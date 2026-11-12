@@ -196,6 +196,10 @@
     };
     # v4.0.0 renames + new ISO/factory-reset surface (renamed from
     # omarchy-setup-* / introduced by the deferred-provisioning work):
+    omarchy-apply-pacman = {
+      class = "declarative-note";
+      note = "Package management is declarative on NixOS: channels, mirrors and packages are defined by your Nix flake.";
+    };
     omarchy-apply-system = {
       class = "declarative-note";
       note = "System setup is the NixOS module: omarchy.enable = true declares the packages, services and /etc equivalents the ISO installer writes by hand.";
@@ -248,6 +252,10 @@
     omarchy-remove-service-1password = {
       class = "declarative-note";
       note = "1Password is removed with omarchy-nix-remove install.service.1password (or from your flake config); there is no /usr/share browser extension file to delete on NixOS.";
+    };
+    omarchy-remove-service-dropbox = {
+      class = "declarative-note";
+      note = "Dropbox is removed with omarchy-nix-remove install.service.dropbox (or from your flake config).";
     };
     # f2a39c4: the new platform dispatcher and deferred hardware provisioner
     # execute Arch package-owned hooks as root. NixOS owns the hardware,
@@ -392,7 +400,6 @@
     };
     omarchy-security-functions = {
       class = "nixos-adapted";
-      allow = [ "sudo" ];
     };
     omarchy-update-stay-awake = {
       class = "nixos-adapted";
@@ -660,7 +667,6 @@
       class = "user-safe";
       allow = [
         "etc-sysconf"
-        "sudo"
       ];
     };
     # ASUS ROG + ALC285 only: amixer levels and a best-effort

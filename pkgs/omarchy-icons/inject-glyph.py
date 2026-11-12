@@ -30,7 +30,7 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.svgLib.path import parse_path
 from fontTools.ttLib import TTFont
 
-CODEPOINT = 0xE910
+CODEPOINT = 0xE920
 GLYPH_NAME = "zcode"
 EM = 1024
 BOX = 896

@@ -113,6 +113,8 @@ else if hasSudoCmd "/run/current-system/sw/bin/asdcontrol" then
   throw "demo config still grants NOPASSWD asdcontrol (upstream removed etc/sudoers.d/omarchy-asdcontrol in v4.0.1)"
 else if !(hasInfix "passwd_tries=10" demoCfg.security.sudo.extraConfig) then
   throw "demo config missing passwd_tries=10 (etc/sudoers.d/omarchy-passwd-tries)"
+else if !(hasInfix "timestamp_timeout=10" demoCfg.security.sudo.extraConfig) then
+  throw "demo config missing timestamp_timeout=10 (etc/sudoers.d/omarchy-sudo-timeout)"
 else if demoCfg.services.printing.browsed.enable then
   throw "demo config still enables cups-browsed (upstream removed automatic printer discovery in v4.0.2)"
 else if !demoCfg.services.printing.enable then
