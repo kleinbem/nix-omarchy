@@ -1433,8 +1433,8 @@ in
       # derivation). boot.plymouth.theme + themePackages wire NixOS to use it.
       (lib.mkIf (cfg.plymouth.enable && cfg.plymouthPackage != null) {
         boot.plymouth = {
-          enable = true;
-          theme = "omarchy";
+          enable = lib.mkDefault true;
+          theme = lib.mkDefault "omarchy";
           themePackages = [ cfg.plymouthPackage ];
         };
       })
