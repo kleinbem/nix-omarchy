@@ -28,6 +28,7 @@ let
             "obsidian"
             "owe"
             "chromium"
+            "fcitx5"
             "no-such-package"
           ];
         }
@@ -55,6 +56,8 @@ else if hasName "owe-.*" || cfg.systemd.user.services ? owed then
   throw "exclude_packages: \"owe\" left the app package or its owed unit"
 else if has dpkgs.chromium || hasName "chromium-desktop-alias" then
   throw "exclude_packages: \"chromium\" left chromium or its desktop alias"
+else if has dpkgs.fcitx5 || (cfg.systemd.user.services.omarchy-fcitx5.enable or true) then
+  throw "exclude_packages: \"fcitx5\" left fcitx5 or left omarchy-fcitx5.service enabled"
 else if
   builtins.length unmatched != 1
   || builtins.match ".*\"no-such-package\".*" (builtins.head unmatched) == null

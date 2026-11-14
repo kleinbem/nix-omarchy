@@ -258,21 +258,25 @@ stdenv.mkDerivation (finalAttrs: {
           --replace-fail 'HOST_PATH="$OMARCHY_PATH/bin/' 'HOST_PATH="/run/current-system/sw/share/omarchy/bin/'
 
         # --- first-run / finalize-user path + platform adaptation ---
-        # xcompose.sh tees ~/.XCompose with a hardcoded Arch include path.
+        # Point at the stable system profile (not $out, which dangles after GC) and
+        # preserve any pre-existing user ~/.XCompose (no-link: NixOS store GC + dual-DE).
         substituteInPlace install/user/xcompose.sh \
+          --replace-fail 'tee ~/.XCompose >/dev/null <<EOF' \
+            $'if [[ -e ~/.XCompose || -L ~/.XCompose ]]; then exit 0; fi\ntee ~/.XCompose >/dev/null <<EOF' \
           --replace-fail 'include "/usr/share/omarchy/default/xcompose"' \
-          "include \"$out/share/omarchy/default/xcompose\""
+            'include "/run/current-system/sw/share/omarchy/default/xcompose"'
 
-        # OWE (349ecc0): owed.service and its theme-set hook come from the
-        # owe package (systemd.packages + /run/current-system/sw/share/owe),
-        # which omarchy.exclude_packages can drop. Enable both only when the
-        # unit exists, so first-run (set -euo pipefail) still completes
-        # without owe; the hook source moves off /usr/share.
+        # NixOS wires .wants/ declaratively in modules/nixos/default.nix; `enable`
+        # writes generation-pinned /nix/store symlinks into ~/.config/systemd/user
+        # and fails on masked/excluded units (no-link: NixOS declarative systemd).
         substituteInPlace install/user/first-run/enable-user-units.sh \
           --replace-fail $'  bt-agent.service \\\n  owed.service \\\n' $'  bt-agent.service \\\n' \
           --replace-fail \
+            '  systemctl --user enable --now "$unit" || failed=1' \
+            $'  if [[ $(systemctl --user show -p LoadState --value "$unit") == loaded ]]; then\n    systemctl --user start "$unit" || failed=1\n  fi' \
+          --replace-fail \
             'omarchy-hook-install theme-set /usr/share/owe/10-owe-sync' \
-            $'if systemctl --user cat owed.service >/dev/null 2>&1; then\n  systemctl --user enable --now owed.service\n  omarchy-hook-install theme-set /run/current-system/sw/share/owe/10-owe-sync\nfi'
+            $'if [[ $(systemctl --user show -p LoadState --value owed.service) == loaded ]]; then\n  systemctl --user start owed.service || failed=1\n  omarchy-hook-install theme-set /run/current-system/sw/share/owe/10-owe-sync\nfi'
 
         # omarchy-language: locale generation is the one root step in the
         # Setup > Language flow (writes /etc/locale.gen + locale-gen behind
@@ -313,6 +317,38 @@ stdenv.mkDerivation (finalAttrs: {
     # omarchy-nix: mise-work is Arch packaging; intentionally no-op on NixOS.
     exit 0
     EOF
+
+        # Preserve existing user keyrings (e.g. GNOME's login.keyring) on dual-DE
+        # systems: gnome-keyring defaults to login.keyring when no `default` file
+        # exists, so writing Default_keyring hides existing secrets (no-link: NixOS dual-DE).
+        substituteInPlace install/user/default-keyring.sh \
+          --replace-fail 'mkdir -p "$KEYRING_DIR"' \
+            $'mkdir -p "$KEYRING_DIR"\nchmod 700 "$KEYRING_DIR"\n\nshopt -s nullglob\nexisting_keyrings=("$KEYRING_DIR"/*.keyring)\nshopt -u nullglob\nif (( ''${#existing_keyrings[@]} > 0 )); then\n  if [[ -f "$KEYRING_FILE" ]]; then\n    chmod 600 "$KEYRING_FILE"\n  fi\n  exit 0\nfi'
+
+        # Defer initial GTK/icon dconf seeding from theme.sh to first-run/gnome-theme.sh,
+        # and only seed unset dconf keys so existing GNOME/HM themes survive (no-link: NixOS dual-DE).
+        substituteInPlace install/user/theme.sh \
+          --replace-fail '    omarchy-theme-set "Tokyo Night"' \
+            '    DBUS_SESSION_BUS_ADDRESS= omarchy-theme-set "Tokyo Night"'
+        overwrite_upstream install/user/first-run/gnome-theme.sh <<'EOF'
+    set_if_unset() {
+      local key=$1 val=$2
+      if ! command -v dconf >/dev/null 2>&1 || [[ -z $(dconf read "/org/gnome/desktop/interface/$key" 2>/dev/null || true) ]]; then
+        gsettings set org.gnome.desktop.interface "$key" "$val"
+      fi
+    }
+    set_if_unset gtk-theme "Adwaita-dark"
+    set_if_unset color-scheme "prefer-dark"
+    set_if_unset icon-theme "Yaru-blue"
+    EOF
+
+        # Hyprland >=0.56 segfaults in CCursorManager::setCursorFromName ->
+        # cairo_image_surface_get_stride(NULL) when XCURSOR_THEME=omarchy-startup
+        # only provides left_ptr and lacks an index.theme fallback (no-link: upstream omarchy-startup cursor dir omits index.theme).
+        if [[ -d default/hypr/cursors/omarchy-startup && ! -f default/hypr/cursors/omarchy-startup/index.theme ]]; then
+          printf '[Icon Theme]\nName=omarchy-startup\nInherits=default\n' \
+            > default/hypr/cursors/omarchy-startup/index.theme
+        fi
 
         # --- L4 adaptation: read-only inheritance fix ---
         # cp/cp -r from the read-only store ($OMARCHY_PATH) into $HOME
