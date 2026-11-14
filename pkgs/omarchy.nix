@@ -314,6 +314,21 @@ stdenv.mkDerivation (finalAttrs: {
     exit 0
     EOF
 
+        # Preserve existing user keyrings (e.g. GNOME's login.keyring) on dual-DE
+        # systems: gnome-keyring defaults to login.keyring when no `default` file
+        # exists, so writing Default_keyring here silently hides existing secrets.
+        substituteInPlace install/user/default-keyring.sh \
+          --replace-fail 'mkdir -p "$KEYRING_DIR"' \
+            $'mkdir -p "$KEYRING_DIR"\n\nif compgen -G "$KEYRING_DIR/*.keyring" >/dev/null; then\n  exit 0\nfi'
+
+        # Hyprland >=0.56 segfaults in CCursorManager::setCursorFromName ->
+        # cairo_image_surface_get_stride(NULL) when XCURSOR_THEME=omarchy-startup
+        # only provides left_ptr and lacks an index.theme fallback.
+        if [[ -d default/hypr/cursors/omarchy-startup && ! -f default/hypr/cursors/omarchy-startup/index.theme ]]; then
+          printf '[Icon Theme]\nName=omarchy-startup\nInherits=default\n' \
+            > default/hypr/cursors/omarchy-startup/index.theme
+        fi
+
         # --- L4 adaptation: read-only inheritance fix ---
         # cp/cp -r from the read-only store ($OMARCHY_PATH) into $HOME
         # preserves the store's 444/555 modes, leaving user configs, theme
