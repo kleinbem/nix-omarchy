@@ -197,7 +197,7 @@ stdenv.mkDerivation (finalAttrs: {
         # Workaround: the portal wants region coordinates relative to the
         # output, and slurp's %x,%y are global, so region shares on a monitor
         # off the layout origin come out offset or black. Drop with
-        # omacom/omarchy#12391.
+        # omacom/omarchy#8055 (reported in omacom/omarchy#12391).
         substituteInPlace config/hyprland-preview-share-picker/config.yaml \
           --replace-fail "slurp -f '%o@%x,%y,%w,%h'" "slurp -f '%o@%X,%Y,%W,%H'"
 
