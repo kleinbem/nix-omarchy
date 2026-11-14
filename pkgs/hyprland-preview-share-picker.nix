@@ -25,10 +25,11 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "hyprland-preview-share-picker";
-  # Pinned to master HEAD past v0.2.1 for the window title/class
-  # sanitization and disabled-monitor offset fixes (upstream issues #11
-  # and #19); no tagged
-  # release carries them yet (audited 2026-07-29).
+  # Workaround: held past v0.2.1 for WhySoBad/hyprland-preview-share-picker#11 and #19.
+  # v0.3.1 (also in nixpkgs) has both, but wants output-relative region
+  # coordinates, and Omarchy's config still passes slurp's global '%x,%y'.
+  # Move to v0.3.1 or pkgs' build when Omarchy switches to '%X,%Y'.
+  # no-link: not reported to basecamp/omarchy yet.
   version = "0.2.1-unstable-2026-06-21";
 
   src = fetchFromGitHub {
