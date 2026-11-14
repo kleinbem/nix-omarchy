@@ -518,7 +518,7 @@ let
     name = "hyprland-uwsm";
     text = ''
       [Desktop Entry]
-      Name=Hyprland (UWSM)
+      Name=Omarchy (Hyprland)
       Comment=Omarchy Quattro (uwsm-managed)
       Exec=${pkgs.uwsm}/bin/uwsm start -e -D Hyprland hyprland.desktop
       DesktopNames=Hyprland
@@ -1508,10 +1508,23 @@ in
             enableDefaultPath = false;
             serviceConfig.KillMode = "mixed";
           };
-          bt-agent.wantedBy = [ "graphical-session.target" ];
-          omarchy-fcitx5.wantedBy = [ "graphical-session.target" ];
+          bt-agent = {
+            wantedBy = [ "graphical-session.target" ];
+            after = [ "graphical-session-pre.target" ];
+            partOf = [ "graphical-session.target" ];
+            unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
+          };
+          omarchy-fcitx5 =
+            if isExcluded pkgs.fcitx5 then
+              { enable = lib.mkDefault false; }
+            else
+              {
+                wantedBy = [ "graphical-session.target" ];
+                unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
+              };
           omarchy-migrate-notify = {
             wantedBy = [ "graphical-session.target" ];
+            unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
             path = [
               pkgs.jq
               pkgs.util-linux
@@ -1520,39 +1533,18 @@ in
               "${cfg.package}/share/omarchy"
             ];
           };
-          # The migration runner itself. Upstream runs migrations from
-          # omarchy-update (before the session), which NixOS consumers bypass
-          # when they rebuild with plain nixos-rebuild — pending user-safe
-          # migrations (e.g. bar-layout jq edits) then never apply, and the
-          # runner's first-run baseline would wrongly swallow them later. Run
-          # the fail-closed runner at every graphical login instead: markers
-          # make it a cheap no-op when nothing is pending, a fresh user still
-          # baselines, and a rebuild + relogin picks up new migrations
-          # automatically. wantedBy + before graphical-session.target holds
-          # that target (and every unit ordered after it) until the runner
-          # exits. It does NOT gate the shell: Hyprland's hyprland.start hook
-          # (default/hypr/autostart.lua) launches quickshell straight from
-          # the compositor, in parallel with this unit. That matches
-          # upstream, where omarchy-update runs migrations under a live
-          # shell: migrations that touch shell config ask the running shell
-          # over IPC (omarchy-shell) or take effect at its next restart.
-          # Also before the notifier so a clean run never leaves a stale
-          # "migrations pending" alert. No After=/Requires= on anything
-          # ordered after graphical-session (avoids a dependency cycle).
-          # OMARCHY_PATH is pinned to the configured package (not the
-          # session env) so migrations always apply against the new tree.
-          # TimeoutStartSec: oneshot units have no start timeout by default,
-          # and this one holds graphical-session.target, so a hung migration
-          # would stall the target indefinitely. A timed-out run is killed;
-          # its migration stays unmarked (the runner is fail-closed) and
-          # retries at the next login.
+          # Run pending user-safe migrations at every Hyprland login so plain
+          # nixos-rebuild updates still apply them before graphical-session.target
+          # and omarchy-migrate-notify. TimeoutStartSec prevents stalling login.
           omarchy-migrate = {
             description = "Run pending Omarchy migrations (omarchy-nix)";
             wantedBy = [ "graphical-session.target" ];
+            after = [ "graphical-session-pre.target" ];
             before = [
               "graphical-session.target"
               "omarchy-migrate-notify.service"
             ];
+            unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
             environment.OMARCHY_PATH = "${cfg.package}/share/omarchy";
             # Unit PATH is sparse; the runner and user-safe migrations call
             # jq/awk/sed/gsettings/systemctl/hyprctl plus sibling omarchy-*
@@ -1595,6 +1587,8 @@ in
           # resolves to $pkg/share/omarchy/bin.
           omarchy-sleep-lock = {
             wantedBy = [ "graphical-session.target" ];
+            after = [ "graphical-session-pre.target" ];
+            unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
             path =
               (with pkgs; [
                 bash
@@ -1618,6 +1612,7 @@ in
           # install/user/first-run/enable-user-units.sh.
           omarchy-crash-watch = {
             wantedBy = [ "graphical-session.target" ];
+            unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
             path = [
               pkgs.jq
               pkgs.socat
@@ -1629,6 +1624,9 @@ in
           # enables it upstream). The unit ships in the owe package.
           owed = lib.mkIf (owePkg != null) {
             wantedBy = [ "graphical-session.target" ];
+            after = [ "graphical-session-pre.target" ];
+            partOf = [ "graphical-session.target" ];
+            unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
             # NixOS unit defaults replace the login PATH. OWE's shell
             # handoff and startup-intro probe need these commands too.
             path = [
@@ -1641,6 +1639,8 @@ in
           };
           omarchy-tailscale-receive = {
             wantedBy = lib.mkIf config.services.tailscale.enable [ "graphical-session.target" ];
+            after = [ "graphical-session-pre.target" ];
+            unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
             path = [
               config.services.tailscale.package
               pkgs.jq
