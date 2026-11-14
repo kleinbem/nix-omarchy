@@ -120,6 +120,7 @@ let
     "paths HM programs own are not seeded" =
       !seeds ".config/git/config" flake
       && !seeds ".config/starship.toml" flake
+      && !seeds ".config/autostart/limine-snapper-notify.desktop" flake
       && seeds ".config/hypr/hyprland.lua" flake;
     "no default-browser step when HM owns mimeapps.list" =
       flake.home.activation.omarchyDefaultBrowser.data == "";

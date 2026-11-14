@@ -320,6 +320,7 @@ in
           ${seedStub effPkg "btop/btop.conf"}
           ${seedStub effPkg "starship.toml"}
           ${seedStub effPkg "opencode/opencode.json"}
+          ${seedStub effPkg "opencode/cli.json"}
 
           # --- input / media
           ${seedStub effPkg "fcitx5/conf/clipboard.conf"}
@@ -343,9 +344,8 @@ in
           # fresh users; existing users get it from migration 1791934674.
           ${seedStub effPkg "hyprland-mimeapps.list"}
 
-          # --- autostart : XDG autostart desktop entries (launched by
-          # the desktop environment on session start).
-          ${seedStub effPkg "autostart/limine-snapper-notify.desktop"}
+          # --- autostart : XDG autostart desktop entries (limine-snapper is
+          # Arch-only and intentionally omitted).
           ${seedStub effPkg "autostart/org.fcitx.Fcitx5.desktop"}
           ${seedStub effPkg "autostart/print-applet.desktop"}
 

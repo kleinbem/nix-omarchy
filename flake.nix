@@ -324,27 +324,18 @@
                 omarchy.fish.package = lib.mkDefault hostPackages.omarchy-fish;
               }
 
-              # Mesa from the hyprland input's own nixpkgs, both halves. The
-              # Hyprland flake's packages are built against that nixpkgs; a
-              # system Mesa from another nixpkgs is the mismatch the Hyprland
-              # wiki ("Installing Hyprland on NixOS", hyprwm/Hyprland#5148)
-              # names as the cause of lag and FPS drops in GPU apps, and its
-              # fix sets package and package32 from that same nixpkgs. The
-              # version can be older or newer than this flake's stable pin;
-              # matching Hyprland is the point, not freshness. package32
-              # follows so 32-bit clients (Steam, Wine) load the same driver
-              # build as 64-bit ones instead of a mixed pair.
-              # mkOverride 500 wins over nixpkgs' mkDefault (1000) but a
-              # consumer's plain = (100) still overrides each half.
-              # Guarded by omarchy.enable: merely IMPORTING the module
-              # must not change the host's Mesa.
+              # Match the host's Mesa driver to the nixpkgs Hyprland is built
+              # against so the compositor and clients load the same driver ABI;
+              # 32-bit Mesa applies on x86_64.
               (lib.mkIf config.omarchy.enable (
                 let
                   hyprlandPkgs = inputs.hyprland.inputs.nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system};
                 in
                 {
                   hardware.graphics.package = lib.mkOverride 500 hyprlandPkgs.mesa;
-                  hardware.graphics.package32 = lib.mkOverride 500 hyprlandPkgs.pkgsi686Linux.mesa;
+                  hardware.graphics.package32 = lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 (
+                    lib.mkOverride 500 hyprlandPkgs.pkgsi686Linux.mesa
+                  );
                 }
               ))
             ];

@@ -23,16 +23,53 @@ jobs:
           attic-token: ${{ secrets.ATTIC_PULL_TOKEN }}
       - name: Build omarchy package
         run: nix build -L --no-link .#packages.x86_64-linux.omarchy
+      # Excludes VM checks and source-heavy checks that compile patched
+      # quickshell (omarchy-{qml-commands,quickshell-version,sleep-lock-path})
+      # or build every Install-menu app (omarchy-owned-packages).
       - name: Run fast checks
         run: >
           nix build -L --no-link
+          .#checks.x86_64-linux.catalog-consistency
+          .#checks.x86_64-linux.omarchy-agent-accounts
+          .#checks.x86_64-linux.omarchy-bash-syntax
+          .#checks.x86_64-linux.omarchy-binfmt-eval
+          .#checks.x86_64-linux.omarchy-browser-default
+          .#checks.x86_64-linux.omarchy-build-guards
+          .#checks.x86_64-linux.omarchy-consumer-overrides
+          .#checks.x86_64-linux.omarchy-disabled-state
+          .#checks.x86_64-linux.omarchy-etc-parity
+          .#checks.x86_64-linux.omarchy-exclude-packages
+          .#checks.x86_64-linux.omarchy-fish-module
+          .#checks.x86_64-linux.omarchy-fish-package
+          .#checks.x86_64-linux.omarchy-fish-parity
+          .#checks.x86_64-linux.omarchy-flake-resolver
+          .#checks.x86_64-linux.omarchy-hm-activation
+          .#checks.x86_64-linux.omarchy-hm-eval
+          .#checks.x86_64-linux.omarchy-icon-font
+          .#checks.x86_64-linux.omarchy-launch-desktop-glob
+          .#checks.x86_64-linux.omarchy-managed-nested-attrs
+          .#checks.x86_64-linux.omarchy-managed-options
+          .#checks.x86_64-linux.omarchy-menu-guards
+          .#checks.x86_64-linux.omarchy-migration-adapters
+          .#checks.x86_64-linux.omarchy-migration-parity
+          .#checks.x86_64-linux.omarchy-migrations
+          .#checks.x86_64-linux.omarchy-module-defaults
+          .#checks.x86_64-linux.omarchy-multi-de
+          .#checks.x86_64-linux.omarchy-nix-transactions
+          .#checks.x86_64-linux.omarchy-option-validation
+          .#checks.x86_64-linux.omarchy-options-documented
+          .#checks.x86_64-linux.omarchy-pam-eval
+          .#checks.x86_64-linux.omarchy-probe-quickshell-reload-eval
           .#checks.x86_64-linux.omarchy-runtime
           .#checks.x86_64-linux.omarchy-shebangs
-          .#checks.x86_64-linux.omarchy-bash-syntax
-          .#checks.x86_64-linux.catalog-consistency
-          .#checks.x86_64-linux.omarchy-etc-parity
-          .#checks.x86_64-linux.omarchy-migration-parity
-      - name: Check demo app and metadata
+          .#checks.x86_64-linux.omarchy-skill
+          .#checks.x86_64-linux.omarchy-system-tuning
+          .#checks.x86_64-linux.omarchy-taildrop
+          .#checks.x86_64-linux.omarchy-udiskie-autostart
+          .#checks.x86_64-linux.omarchy-unfree-consumer
+          .#checks.x86_64-linux.omarchy-update-flow
+      - name: Check demo app, consumer example eval, and metadata
         run: |
           nix eval --raw .#apps.x86_64-linux.demo.program
+          nix eval --raw .#nixosConfigurations.example.config.system.build.toplevel.drvPath
           nix flake metadata
