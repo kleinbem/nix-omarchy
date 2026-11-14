@@ -109,15 +109,18 @@ stdenv.mkDerivation (finalAttrs: {
 
   src = omarchy-src;
 
+  # Pass large phase scripts via files so postPatch/installPhase stay clear of
+  # Linux's 128 KiB per-env-var MAX_ARG_STRLEN ceiling.
+  passAsFile = [
+    "postPatchScript"
+    "installPhaseScript"
+  ];
+  postPatch = ''source "$postPatchScriptPath"'';
+  installPhase = ''source "$installPhaseScriptPath"'';
+
   # Patch the single source of truth for OMARCHY_PATH so the packaged default
-  # resolves to this derivation's output. Other files (default/hypr/paths.lua,
-  # default/hypr/bootstrap.lua) already read OMARCHY_PATH from the environment
-  # and only fall back to /usr/share/omarchy — that fallback is left intact
-  # because the NixOS module always sets the var.
-  #
-  # Also path-adapt the systemd user units: /usr/bin/* is dead on NixOS.
-  # Units are later installed to $out/lib/systemd/user/ for systemd.packages.
-  postPatch = ''
+  # resolves to this derivation's output; path-adapt systemd user units too.
+  postPatchScript = ''
         substituteInPlace default/bash/env-bootstrap \
           --replace-fail "/usr/share/omarchy" "$out/share/omarchy" \
           --replace-fail 'omarchy_wrapper_dir="''${MISE_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/mise}/command-wrappers/bin"' \
@@ -1392,11 +1395,13 @@ stdenv.mkDerivation (finalAttrs: {
             $'  name=''${skill##*/}\n  [[ $name == omarchy-app ]] && continue' \
           --replace-fail $'  ln -sfn "$skill" ~/.agents/skills/"$name"\n  ln -sfn "$skill" ~/.claude/skills/"$name"\n  ln -sfn "$skill" ~/.codex/skills/"$name"\n  ln -sfn "$skill" ~/.pi/agent/skills/"$name"\n  ln -sfn "$skill" ~/.gemini/config/skills/"$name"\n  ln -sfn "$skill" ~/.hermes/skills/"$name"' \
             $'  for dst in ~/.agents/skills/"$name" ~/.claude/skills/"$name" ~/.codex/skills/"$name" ~/.pi/agent/skills/"$name" ~/.gemini/config/skills/"$name" ~/.hermes/skills/"$name"; do\n    [[ -L $dst && $(readlink "$dst") == /nix/store/*-home-manager-files/* ]] && continue\n    ln -sfn "$skill" "$dst"\n  done' \
+          --replace-fail '      ln -sfn "$skill" "$profile/skills/$name"' \
+            $'      [[ -L $profile/skills/$name && $(readlink "$profile/skills/$name") == /nix/store/*-home-manager-files/* ]] && continue\n      ln -sfn "$skill" "$profile/skills/$name"' \
           --replace-fail $'xdg-user-dirs-update --set TEMPLATES "$HOME"\nxdg-user-dirs-update --set PUBLICSHARE "$HOME"\nxdg-user-dirs-update --set DESKTOP "$HOME"' \
             $'for d in TEMPLATES:Templates PUBLICSHARE:Public DESKTOP:Desktop; do\n  if ! grep -q "^XDG_''${d%%:*}_DIR=" "''${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs" 2>/dev/null; then\n    xdg-user-dirs-update --set "''${d%%:*}" "$HOME"\n    rmdir "$HOME/''${d#*:}" 2>/dev/null || true\n  fi\ndone' \
           --replace-fail 'rmdir ~/Templates ~/Public ~/Desktop 2>/dev/null || true' ':' \
           --replace-fail $'env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings set default-web-browser chromium.desktop\nxdg-mime default HEY.desktop x-scheme-handler/mailto' \
-            $'mimeapps="''${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"\nif [[ ! -L $mimeapps || $(readlink "$mimeapps") != /nix/store/* ]]; then\n  if omarchy-pkg-present chromium && ! grep -qE "^(x-scheme-handler/http|text/html)=" "$mimeapps" 2>/dev/null; then\n    env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings set default-web-browser chromium.desktop\n  fi\n  if ! grep -q "^x-scheme-handler/mailto=" "$mimeapps" 2>/dev/null; then\n    xdg-mime default HEY.desktop x-scheme-handler/mailto\n  fi\nfi'
+            $'mimeapps="''${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"\nlegacy_mimeapps="''${XDG_DATA_HOME:-$HOME/.local/share}/applications/mimeapps.list"\nif [[ ! -L $mimeapps || $(readlink "$mimeapps") != /nix/store/* ]]; then\n  if omarchy-pkg-present chromium && ! grep -qE "^(x-scheme-handler/http|text/html)=" "$mimeapps" 2>/dev/null && ! grep -qE "^(x-scheme-handler/http|text/html)=" "$legacy_mimeapps" 2>/dev/null; then\n    env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings set default-web-browser chromium.desktop\n  fi\n  if [[ -z $(XDG_CURRENT_DESKTOP= xdg-mime query default x-scheme-handler/mailto 2>/dev/null) ]] && ! grep -q "^x-scheme-handler/mailto=" "$mimeapps" 2>/dev/null && ! grep -q "^x-scheme-handler/mailto=" "$legacy_mimeapps" 2>/dev/null; then\n    xdg-mime default HEY.desktop x-scheme-handler/mailto\n  fi\nfi'
         substituteInPlace migrations/1787843905.sh \
           --replace-fail '  name=''${name##*/}' \
             $'  name=''${name##*/}\n  [[ $name == omarchy-app ]] && continue'
@@ -2098,7 +2103,7 @@ stdenv.mkDerivation (finalAttrs: {
   dontConfigure = true;
   dontBuild = true;
 
-  installPhase = ''
+  installPhaseScript = ''
     runHook preInstall
 
     dest="$out/share/omarchy"

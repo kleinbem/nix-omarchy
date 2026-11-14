@@ -83,4 +83,5 @@ in
   omarchy-system-tuning = import ./omarchy-system-tuning.nix args;
   omarchy-consumer-overrides = import ./omarchy-consumer-overrides.nix args;
   omarchy-module-defaults = import ./omarchy-module-defaults.nix args;
+  omarchy-multi-de = import ./omarchy-multi-de.nix args;
 }

@@ -60,7 +60,7 @@ example/               # demo consumer configuration.nix
 CHANGELOG.md           # user-visible changes, newest first
 docs/                  # install.md, options.md, UPSTREAM.md, vm.md,
                        # nix-best-practices.md
-.github/workflows/     # CI (fast check suite), fleet-lint, nightly maintain
+.github/workflows/     # CI (PR check suite), fleet-lint, nightly maintain
 templates/default/     # `nix flake init -t` consumer starter template
 ```
 

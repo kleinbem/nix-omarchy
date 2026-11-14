@@ -36,14 +36,14 @@ pkgs.runCommand "omarchy-migration-adapters-check" { } ''
   NVIM_LUALINE=${nvimPkg}/share/omarchy-nvim/config/lua/plugins/lualine-transparent.lua
   EXT=/run/current-system/sw/share/omarchy/default/chromium/extensions
 
-  tested="1780517689.sh 1781587663.sh 1784401744.sh 1787580187.sh 1788996284.sh 1789764927.sh 1791723398.sh 1791935188.sh"
+  tested="1780517689.sh 1781587663.sh 1784401744.sh 1787580187.sh 1788996284.sh 1789764927.sh 1791723398.sh 1791935188.sh 1793477875.sh"
   [[ $(ls "$A" | sort | xargs) == "$tested" ]] ||
     fail "adapters changed ($(ls "$A" | xargs)); add their cases to this check"
 
   STUB=$TMPDIR/stub
   mkdir -p "$STUB"
   for s in omarchy-install-chromium-ytdlp omarchy-restart-tmux omarchy-hw-match gsettings \
-    systemctl omarchy-hook-install; do
+    systemctl omarchy-hook-install omarchy-default-dictation omarchy-cmd-present; do
     ln -s ${stub} "$STUB/$s"
   done
   export STUB_LOG=$TMPDIR/stub.log
@@ -350,6 +350,32 @@ pkgs.runCommand "omarchy-migration-adapters-check" { } ''
   [[ $(grep -c -- '--no-default-browser-check' "$H/.config/chromium-flags.conf") == 1 ]] ||
     fail "1791935188 appended the flag twice"
   echo "1791935188 OK"
+
+  # --- 1793477875: legacy dictation bindings in bindings.lua ----------
+  fresh dict-absent
+  run 1793477875.sh "$NO_NVIM"
+  [[ ! -e $H/.config/hypr/bindings.lua ]] || fail "1793477875 created bindings.lua"
+
+  fresh dict-link
+  dotlink "$H/.config/hypr/bindings.lua" '-- user bindings'
+  run 1793477875.sh "$NO_NVIM"
+  is_link "$H/.config/hypr/bindings.lua"
+  grep -qF '"SUPER + CTRL + X"' "$H/.config/hypr/bindings.lua" &&
+    grep -qF '"F9"' "$H/.config/hypr/bindings.lua" ||
+    fail "1793477875 did not append legacy dictation bindings through a writable link"
+  run 1793477875.sh "$NO_NVIM"
+  [[ $(grep -cF '"SUPER + CTRL + X"' "$H/.config/hypr/bindings.lua") == 1 ]] ||
+    fail "1793477875 appended bindings twice"
+
+  fresh dict-ro-link
+  dotlink "$H/.config/hypr/bindings.lua" '-- hm bindings' ro
+  run 1793477875.sh "$NO_NVIM"
+  is_link "$H/.config/hypr/bindings.lua"
+  [[ $(cat "$H/.config/hypr/bindings.lua") == '-- hm bindings' ]] ||
+    fail "1793477875 modified a read-only symlinked bindings.lua"
+  grep -q 'Preserving read-only' "$TMPDIR/run.log" ||
+    fail "1793477875 skipped a read-only bindings.lua silently"
+  echo "1793477875 OK"
 
   touch $out
 ''

@@ -325,7 +325,8 @@
               }
 
               # Match the host's Mesa driver to the nixpkgs Hyprland is built
-              # against (hyprwm/Hyprland#5148); 32-bit Mesa applies on x86_64.
+              # against so the compositor and clients load the same driver ABI;
+              # 32-bit Mesa applies on x86_64.
               (lib.mkIf config.omarchy.enable (
                 let
                   hyprlandPkgs = inputs.hyprland.inputs.nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system};

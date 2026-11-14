@@ -1590,6 +1590,7 @@ in
           };
           omarchy-recover-internal-monitor = {
             wantedBy = [ "graphical-session-pre.target" ];
+            unitConfig.ConditionEnvironment = "XDG_SESSION_DESKTOP=Hyprland";
             path = [ "${cfg.package}/share/omarchy" ];
           };
           # crash-watch: the v4.0.0 journal-fed coredump watcher (crash toast

@@ -23,6 +23,9 @@ jobs:
           attic-token: ${{ secrets.ATTIC_PULL_TOKEN }}
       - name: Build omarchy package
         run: nix build -L --no-link .#packages.x86_64-linux.omarchy
+      # Excludes VM checks and source-heavy checks that compile patched
+      # quickshell (omarchy-{qml-commands,quickshell-version,sleep-lock-path})
+      # or build every Install-menu app (omarchy-owned-packages).
       - name: Run fast checks
         run: >
           nix build -L --no-link
@@ -51,6 +54,7 @@ jobs:
           .#checks.x86_64-linux.omarchy-migration-parity
           .#checks.x86_64-linux.omarchy-migrations
           .#checks.x86_64-linux.omarchy-module-defaults
+          .#checks.x86_64-linux.omarchy-multi-de
           .#checks.x86_64-linux.omarchy-nix-transactions
           .#checks.x86_64-linux.omarchy-option-validation
           .#checks.x86_64-linux.omarchy-options-documented
