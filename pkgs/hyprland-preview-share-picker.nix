@@ -25,22 +25,19 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "hyprland-preview-share-picker";
-  # Workaround: held past v0.2.1 for WhySoBad/hyprland-preview-share-picker#11 and #19.
-  # v0.3.1 (also in nixpkgs) has both, but wants output-relative region
-  # coordinates, and Omarchy's config still passes slurp's global '%x,%y'.
-  # Move to v0.3.1 or pkgs' build when Omarchy switches to '%X,%Y'.
-  # no-link: not reported to basecamp/omarchy yet.
-  version = "0.2.1-unstable-2026-06-21";
+  # Workaround: our nixpkgs input still has 0.2.1. Drop this file for
+  # pkgs.hyprland-preview-share-picker once it has NixOS/nixpkgs#582643.
+  version = "0.3.1";
 
   src = fetchFromGitHub {
     owner = "WhySoBad";
     repo = "hyprland-preview-share-picker";
-    rev = "e2f30ff85486e557018523da45ccbc846e3a499c";
+    tag = "v${finalAttrs.version}";
     fetchSubmodules = true;
-    hash = "sha256-XE6RD/4Mhw/ZRBj0v94kLOERElat5V+e/X0L9eUGf7M=";
+    hash = "sha256-0yn7YG18SC6+h3vkJNDUda/esmBl6U1tu1LHIIXSknc=";
   };
 
-  cargoHash = "sha256-AqX9jKj7JLEx1SLefyaWYGbRdk0c3H/NDTIsZy6B6hY=";
+  cargoHash = "sha256-4nd0X6Ii6pbpQgzFCw2yXhl2+C5FyqDsHtbzKNpGW5o=";
 
   nativeBuildInputs = [ pkg-config ];
 
