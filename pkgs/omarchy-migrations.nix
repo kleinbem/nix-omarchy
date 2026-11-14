@@ -397,4 +397,18 @@
   "1792474908.sh" = "user-safe"; # repair Brave Origin shortcut in user profiles; reuses 1786643346
   "1792507034.sh" = "skip"; # root NetworkManager reload; native connectivity config activates at rebuild
   "1792648436.sh" = "user-safe"; # migrate DND and retire the old notification state under HOME
+
+  # --- bump ac2690c (v4.5.0) ---
+  "1791554699.sh" = "skip"; # pacman swap to omarchy-power-profiles-daemon; power-profiles-daemon is module-owned
+  "1792504295.sh" = "skip"; # mise lazy shims for coding agents; Nix catalog owns agent CLIs
+  "1792634594.sh" = "skip"; # alsactl store for retired Arch omarchy-settings N1x UCM profiles
+  "1792965062.sh" = "skip"; # Limine/mkinitcpio hibernation resume UUID; boot.resumeDevice is declarative
+  "1793069744.sh" = "skip"; # re-runs 1787494718 (/etc/fido2 ownership); security.pam.u2f is declarative
+  "1793315076.sh" = "skip"; # Apple Silicon Arch omarchy-settings /etc/skel omission; HM seeds ~/.bashrc everywhere
+  "1793452544.sh" = "skip"; # Intel GPU media driver via omarchy-pkg-add; hardware.graphics is declarative
+  "1793477875.sh" = "user-safe"; # preserve F9 / Super+Ctrl+X dictation bindings in ~/.config/hypr/bindings.lua
+  "1793512402.sh" = "skip"; # xorg-xsetroot via omarchy-pkg-add; runtimeDeps ships xsetroot natively
+  "1793531426.sh" = "skip"; # GB10 cpuidle tuning via sudo hardware script; hardware tuning is consumer-owned
+  "1793565796.sh" = "user-safe"; # OpenCode 2 ~/.config/opencode/cli.json system theme ($HOME, chmod 600)
+  "1793667581.sh" = "user-safe"; # initialize unconfigured Superwhisper user setup ($HOME)
 }

@@ -1,9 +1,6 @@
-# omarchy-launch-browser and omarchy-launch-webapp resolve the
-# default/chromium .desktop via a fixed brace list of data dirs.
-# Arch has /usr/share/applications; NixOS puts system apps in
-# /run/current-system/sw/share/applications. Both launchers must
-# search that path — webapps used to drop the Exec= lookup, so
-# uwsm-app treated --app=https://… as the application path.
+# Browser and webapp launchers read .desktop entries via XDG_DATA_DIRS.
+# When XDG_DATA_DIRS is unset in non-login contexts, the fallback must
+# include NixOS profile share dirs rather than only /usr/local/share:/usr/share.
 {
   self,
   pkgs,
@@ -12,27 +9,22 @@
 }:
 let
   omarchyPkg = self.packages.${system}.omarchy;
-  nixosGlob = "{~/.local,~/.nix-profile,/run/current-system/sw,/usr}/share/applications";
-  archGlob = "{~/.local,~/.nix-profile,/usr}/share/applications";
+  nixosFallback = "XDG_DATA_DIRS:-$HOME/.nix-profile/share:/run/current-system/sw/share:/usr/local/share:/usr/share";
+  archFallback = "XDG_DATA_DIRS:-/usr/local/share:/usr/share";
 in
 pkgs.runCommand "omarchy-launch-desktop-glob" { } ''
-  webapp=${omarchyPkg}/share/omarchy/bin/omarchy-launch-webapp
-  browser=${omarchyPkg}/share/omarchy/bin/omarchy-launch-browser
-  grep -Fq '${nixosGlob}' "$webapp" || {
-    echo "omarchy-launch-webapp missing NixOS applications glob" >&2
-    exit 1
-  }
-  grep -Fq '${nixosGlob}' "$browser" || {
-    echo "omarchy-launch-browser missing NixOS applications glob" >&2
-    exit 1
-  }
-  grep -Fq '${archGlob}' "$webapp" && {
-    echo "omarchy-launch-webapp still has the Arch-only applications glob" >&2
-    exit 1
-  }
-  grep -Fq '${archGlob}' "$browser" && {
-    echo "omarchy-launch-browser still has the Arch-only applications glob" >&2
-    exit 1
-  }
+  for script in \
+    ${omarchyPkg}/share/omarchy/bin/omarchy-launch-webapp \
+    ${omarchyPkg}/share/omarchy/bin/omarchy-launch-browser \
+    ${omarchyPkg}/share/omarchy/bin/omarchy-cmd-default-browser; do
+    grep -Fq '${nixosFallback}' "$script" || {
+      echo "$(basename "$script") missing NixOS XDG_DATA_DIRS fallback" >&2
+      exit 1
+    }
+    grep -Fq '${archFallback}' "$script" && {
+      echo "$(basename "$script") still has the Arch-only XDG_DATA_DIRS fallback" >&2
+      exit 1
+    }
+  done
   touch $out
 ''

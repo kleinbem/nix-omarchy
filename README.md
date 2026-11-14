@@ -1,6 +1,6 @@
 # nix-omarchy
 
-A NixOS port of [basecamp/omarchy](https://github.com/basecamp/omarchy), the
+A NixOS port of [omacom/omarchy](https://github.com/omacom/omarchy), the
 Quattro generation.
 
 Omarchy is DHH's opinionated Linux desktop. As of Quattro, its "desktop" is a
@@ -51,11 +51,9 @@ complete update followed by activation. The sddm check covers the daemon,
 the greeter's theme render and the autologin handoff. The remaining paths
 need separate desktop verification after relevant changes.
 
-> This port tracks the `quattro` branch at `3c7027d` (2026-10-22), after
-> `4.5.0-rc1` (2026-10-20). Stable `4.0.6` (2026-10-19) is a divergent
-> backport line, not the base of this snapshot.
-> The vendored `version` file still reads `4.0.0.alpha` — upstream does
-> not bump it at release time.
+> This port pins [omacom/omarchy](https://github.com/omacom/omarchy) at `v4.5.0`
+> (`ac2690c`). The vendored `version` file still reads `4.0.0.alpha` — upstream
+> does not bump it at release time.
 
 ### Known app behaviour (zcode-desktop's desktop entry)
 

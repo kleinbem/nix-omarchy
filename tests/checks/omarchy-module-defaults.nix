@@ -153,6 +153,19 @@ assert expect "theme default reaches the HM render" (rendersTheme "ethereal" dem
 assert expect "theme override reaches the HM render" (rendersTheme "nord" (ext {
   omarchy.theme = "nord";
 })) true;
+assert expect "agent-wrappers scoped out of global PAM PATH" (
+  lib.hasInfix "agent-wrappers" (
+    lib.concatStringsSep ":" (lib.toList minimal.environment.sessionVariables.PATH)
+  )
+) false;
+assert expect "agent-wrappers present in uwsm env.d" (
+  lib.hasInfix "/run/current-system/sw/share/omarchy/agent-wrappers"
+    minimal.environment.etc."xdg/uwsm/env.d/10-omarchy".text
+) true;
+assert expect "warns when HM has users without omarchy.enable" (
+  lib.any (lib.hasInfix "no user in home-manager.users has omarchy.enable = true")
+    (ext { home-manager.users.demo.omarchy.enable = lib.mkForce false; }).warnings
+) true;
 # The rendered sshd_config is grepped at build time (no import from
 # derivation during evaluation).
 pkgs.runCommand "omarchy-module-defaults" { } ''

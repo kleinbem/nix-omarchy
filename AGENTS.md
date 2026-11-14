@@ -59,12 +59,9 @@ skills/omarchy/        # NixOS-native agent skill (packaged + parity manifest)
 example/               # demo consumer configuration.nix
 CHANGELOG.md           # user-visible changes, newest first
 docs/                  # install.md, options.md, UPSTREAM.md, vm.md,
-                       # nix-best-practices.md; MAINTAINERS.md + SYSTEMS.md,
-                       # decisions/ and superpowers/ are maintainer-internal
-                       # (see the note below)
-.forgejo/workflows/    # CI lanes: fast / vm / nightly (internal)
-hosts/                 # maintainer host configs spliced into the flake (internal)
-scripts/publish-public # sanitized snapshot publisher for the GitHub mirror (internal)
+                       # nix-best-practices.md
+.github/workflows/     # CI (fast check suite), fleet-lint, nightly maintain
+templates/default/     # `nix flake init -t` consumer starter template
 ```
 
 The Install/Remove menu is NixOS-native: catalog entries (browsers,

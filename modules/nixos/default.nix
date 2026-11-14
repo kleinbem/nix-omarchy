@@ -252,13 +252,9 @@ let
         wtype
         xdg-desktop-portal-gtk
 
-        # --- Cursor theme: upstream sets no cursor theme name (only
-        # XCURSOR_SIZE/HYPRCURSOR_SIZE=24) and on Arch gets Adwaita cursors
-        # transitively via gnome-themes-extra. We ship no cursor package by
-        # default, so Hyprland cursor resolution falls back to the invisible
-        # default. adwaita-icon-theme provides the cursors; no theme name env
-        # var is set to stay at parity with upstream. ---
+        # Adwaita provides fallback cursors; xsetroot restores the X11/XWayland root cursor.
         adwaita-icon-theme
+        xsetroot
 
         # --- Quattro shell: the whole desktop (bar, launcher, menus,
         # notifications, OSDs, lock, polkit) is a single quickshell process
@@ -642,43 +638,22 @@ in
           # that loses the package path breaks the desktop. Override
           # omarchy.package instead if a different tree is needed.
           #
-          # Both values are deliberately generation-independent stable
-          # system-profile paths, NOT store paths: every lookup re-resolves
-          # the ACTIVE generation, mirroring upstream's static
-          # /usr/share/omarchy. A store-path value freezes the tree at
-          # login — after a `switch` the update flow's post-rebuild steps
-          # (omarchy-migrate, post-update hooks, sibling omarchy-* calls)
-          # keep reading the old, already-applied migration set and old
-          # scripts until re-login (mirror issue #6 follow-up).
+          # Use stable system-profile paths rather than store paths so active
+          # sessions see updated scripts and migrations right after `switch`.
+          # agent-wrappers stays in uwsm/env.d/10-omarchy only so non-Omarchy
+          # sessions (GNOME, Sway, SSH) do not shadow claude/codex/grok.
           OMARCHY_PATH = "/run/current-system/sw/share/omarchy";
           PATH = [
-            "/run/current-system/sw/share/omarchy/agent-wrappers"
             "/run/current-system/sw/share/omarchy/bin"
           ];
           TERMINAL = lib.mkDefault "xdg-terminal-exec";
-          # EDITOR/SUDO_EDITOR mirror default/bash/envs
-          # (EDITOR="${EDITOR:-omarchy-launch-editor --inline}",
-          # SUDO_EDITOR="$EDITOR"). mkDefault mirrors the `:-` soft-default
-          # semantics — any user-set EDITOR wins. SUDO_EDITOR carries the
-          # pam_env indirection ${EDITOR} verbatim into /etc/pam/environment
-          # (the renderer quotes values and only remaps $HOME/$USER), where
-          # pam_env expands it at login — alphabetically the EDITOR line
-          # sorts first, so the expansion sees the effective value. This is
-          # upstream's follows-EDITOR semantics; the module system itself
-          # cannot self-reference inside one attrsOf option (recursion).
+          # pam_env expands ${EDITOR} in file order (EDITOR sorts before
+          # SUDO_EDITOR), preserving upstream's SUDO_EDITOR="$EDITOR" behavior.
           EDITOR = lib.mkDefault "omarchy-launch-editor --inline";
           SUDO_EDITOR = lib.mkDefault "\${EDITOR}";
-          # See gsettingsSchemaDir above — first-run gnome-theme.sh /
-          # gtk-primary-paste.sh call unwrapped gsettings.
           GSETTINGS_SCHEMA_DIR = lib.mkDefault gsettingsSchemaDir;
-          # Nautilus 4 loads native extension .so files ONLY from
-          # NAUTILUS_4_EXTENSION_DIR (compile-time default: the nautilus
-          # package's $out/lib/nautilus/extensions-4 — image-properties +
-          # totem, but NOT libnautilus-python.so). nautilus-python is in
-          # systemPackages, so its loader lands in the system merge path;
-          # point there so HM's seeded localsend.py/transcode.py (and any
-          # user extension in ~/.local/share/nautilus-python/extensions/)
-          # actually load. Issue #60.
+          # Point Nautilus 4 at the merged system extensions dir so
+          # libnautilus-python.so loads seeded user extensions.
           NAUTILUS_4_EXTENSION_DIR = lib.mkDefault "/run/current-system/sw/lib/nautilus/extensions-4";
         };
 
@@ -756,13 +731,23 @@ in
           # chromium must not still fetch chromium to build it.
           ++ lib.optional (!isExcluded pkgs.chromium) chromiumDesktopAlias;
 
-        warnings = map (
-          n:
-          "omarchy.exclude_packages: \"${n}\" matches no package in the module's default set "
-          + "(runtime packages + omarchy.appPackages), so it has no effect. Use the nixpkgs "
-          + "attribute name (e.g. \"libreoffice-fresh\", \"qt6.qtwayland\"); dependencies of "
-          + "other packages cannot be excluded."
-        ) unmatchedExcludes;
+        warnings =
+          map (
+            n:
+            "omarchy.exclude_packages: \"${n}\" matches no package in the module's default set "
+            + "(runtime packages + omarchy.appPackages), so it has no effect. Use the nixpkgs "
+            + "attribute name (e.g. \"libreoffice-fresh\", \"qt6.qtwayland\"); dependencies of "
+            + "other packages cannot be excluded."
+          ) unmatchedExcludes
+          ++ lib.optional (
+            options ? home-manager
+            && (config.home-manager.users or { }) != { }
+            && !lib.any (u: u.omarchy.enable or false) (lib.attrValues config.home-manager.users)
+          ) (
+            "omarchy.enable is true on NixOS, but no user in home-manager.users has omarchy.enable = true. "
+            + "Import nix-omarchy.homeModules.default into Home Manager and set home-manager.users.<name>.omarchy.enable = true "
+            + "so ~/.config/hypr/hyprland.lua is seeded."
+          );
 
         # Font discovery for the runtime fonts above. (Mirrors the names in
         # runtimeDeps; kept explicit here because environment.systemPackages

@@ -237,8 +237,11 @@ stdenv.mkDerivation (finalAttrs: {
         # upstream at 33783b1 and no longer ship; their stub chains and menu
         # ids went with them — see the runtime manifest.)
 
-        # Upstream adopted standard XDG_DATA_DIRS in bin/omarchy-launch-browser
-        # and bin/omarchy-launch-webapp, which naturally includes NixOS paths.
+        # Include NixOS system/user profile paths in the XDG_DATA_DIRS fallback
+        # when XDG_DATA_DIRS is unset in non-login contexts.
+        substituteInPlace bin/omarchy-launch-browser bin/omarchy-launch-webapp bin/omarchy-cmd-default-browser \
+          --replace-fail 'XDG_DATA_DIRS:-/usr/local/share:/usr/share' \
+            'XDG_DATA_DIRS:-$HOME/.nix-profile/share:/run/current-system/sw/share:/usr/local/share:/usr/share'
 
         # chromium-flags.conf seed: --load-extension points at the Arch
         # /usr/share/omarchy. Point it at the system-profile path instead —
@@ -1381,11 +1384,19 @@ stdenv.mkDerivation (finalAttrs: {
           --replace-fail 'run_first_run_step "set GNOME theme" \' \
             $'run_first_run_step "initialize default dictation" \\\n  bash "$OMARCHY_PATH/install/user/first-run/dictation-superwhisper.sh"\nrun_first_run_step "set GNOME theme" \\'
 
-        # Keep the new app-scaffolding guide vendored, but do not install its
-        # Arch-only makepkg/PKGBUILD instructions into the user's agents.
+        # Keep the app-scaffolding guide out of user agents, preserve HM-managed
+        # skill links, and avoid clobbering existing XDG dirs or MIME defaults
+        # on multi-DE setups (no-link: upstream provision-user assumes single-DE Arch).
         substituteInPlace bin/omarchy-provision-user \
           --replace-fail '  name=''${skill##*/}' \
-            $'  name=''${skill##*/}\n  [[ $name == omarchy-app ]] && continue'
+            $'  name=''${skill##*/}\n  [[ $name == omarchy-app ]] && continue' \
+          --replace-fail $'  ln -sfn "$skill" ~/.agents/skills/"$name"\n  ln -sfn "$skill" ~/.claude/skills/"$name"\n  ln -sfn "$skill" ~/.codex/skills/"$name"\n  ln -sfn "$skill" ~/.pi/agent/skills/"$name"\n  ln -sfn "$skill" ~/.gemini/config/skills/"$name"\n  ln -sfn "$skill" ~/.hermes/skills/"$name"' \
+            $'  for dst in ~/.agents/skills/"$name" ~/.claude/skills/"$name" ~/.codex/skills/"$name" ~/.pi/agent/skills/"$name" ~/.gemini/config/skills/"$name" ~/.hermes/skills/"$name"; do\n    [[ -L $dst && $(readlink "$dst") == /nix/store/*-home-manager-files/* ]] && continue\n    ln -sfn "$skill" "$dst"\n  done' \
+          --replace-fail $'xdg-user-dirs-update --set TEMPLATES "$HOME"\nxdg-user-dirs-update --set PUBLICSHARE "$HOME"\nxdg-user-dirs-update --set DESKTOP "$HOME"' \
+            $'for d in TEMPLATES:Templates PUBLICSHARE:Public DESKTOP:Desktop; do\n  if ! grep -q "^XDG_''${d%%:*}_DIR=" "''${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs" 2>/dev/null; then\n    xdg-user-dirs-update --set "''${d%%:*}" "$HOME"\n    rmdir "$HOME/''${d#*:}" 2>/dev/null || true\n  fi\ndone' \
+          --replace-fail 'rmdir ~/Templates ~/Public ~/Desktop 2>/dev/null || true' ':' \
+          --replace-fail $'env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings set default-web-browser chromium.desktop\nxdg-mime default HEY.desktop x-scheme-handler/mailto' \
+            $'mimeapps="''${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"\nif [[ ! -L $mimeapps || $(readlink "$mimeapps") != /nix/store/* ]]; then\n  if omarchy-pkg-present chromium && ! grep -qE "^(x-scheme-handler/http|text/html)=" "$mimeapps" 2>/dev/null; then\n    env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings set default-web-browser chromium.desktop\n  fi\n  if ! grep -q "^x-scheme-handler/mailto=" "$mimeapps" 2>/dev/null; then\n    xdg-mime default HEY.desktop x-scheme-handler/mailto\n  fi\nfi'
         substituteInPlace migrations/1787843905.sh \
           --replace-fail '  name=''${name##*/}' \
             $'  name=''${name##*/}\n  [[ $name == omarchy-app ]] && continue'
