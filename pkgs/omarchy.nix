@@ -1395,8 +1395,8 @@ stdenv.mkDerivation (finalAttrs: {
             $'run_first_run_step "initialize default dictation" \\\n  bash "$OMARCHY_PATH/install/user/first-run/dictation-superwhisper.sh"\nrun_first_run_step "set GNOME theme" \\'
 
         # Keep the app-scaffolding guide out of user agents, preserve HM-managed
-        # skill links, and avoid clobbering existing XDG dirs or MIME defaults
-        # on multi-DE setups (no-link: upstream provision-user assumes single-DE Arch).
+        # skill links, and avoid clobbering existing or HM-linked XDG dirs and MIME defaults
+        # on multi-DE setups (no-link: upstream provision-user assumes single-DE Arch without Home Manager).
         substituteInPlace bin/omarchy-provision-user \
           --replace-fail '  name=''${skill##*/}' \
             $'  name=''${skill##*/}\n  [[ $name == omarchy-app ]] && continue' \
