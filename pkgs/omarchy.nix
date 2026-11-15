@@ -1395,8 +1395,8 @@ stdenv.mkDerivation (finalAttrs: {
             $'run_first_run_step "initialize default dictation" \\\n  bash "$OMARCHY_PATH/install/user/first-run/dictation-superwhisper.sh"\nrun_first_run_step "set GNOME theme" \\'
 
         # Keep the app-scaffolding guide out of user agents, preserve HM-managed
-        # skill links, and avoid clobbering existing XDG dirs or MIME defaults
-        # on multi-DE setups (no-link: upstream provision-user assumes single-DE Arch).
+        # skill links, and avoid clobbering existing or HM-linked XDG dirs and MIME defaults
+        # on multi-DE setups (no-link: upstream provision-user assumes single-DE Arch without Home Manager).
         substituteInPlace bin/omarchy-provision-user \
           --replace-fail '  name=''${skill##*/}' \
             $'  name=''${skill##*/}\n  [[ $name == omarchy-app ]] && continue' \
@@ -1405,7 +1405,9 @@ stdenv.mkDerivation (finalAttrs: {
           --replace-fail '      ln -sfn "$skill" "$profile/skills/$name"' \
             $'      [[ -L $profile/skills/$name && $(readlink "$profile/skills/$name") == /nix/store/*-home-manager-files/* ]] && continue\n      ln -sfn "$skill" "$profile/skills/$name"' \
           --replace-fail $'xdg-user-dirs-update --set TEMPLATES "$HOME"\nxdg-user-dirs-update --set PUBLICSHARE "$HOME"\nxdg-user-dirs-update --set DESKTOP "$HOME"' \
-            $'for d in TEMPLATES:Templates PUBLICSHARE:Public DESKTOP:Desktop; do\n  if ! grep -q "^XDG_''${d%%:*}_DIR=" "''${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs" 2>/dev/null; then\n    xdg-user-dirs-update --set "''${d%%:*}" "$HOME"\n    rmdir "$HOME/''${d#*:}" 2>/dev/null || true\n  fi\ndone' \
+            $'userdirs="''${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs"\n# HM-owned store link: --set replaces it with a file and HM activation then fails.\nhm_userdirs=0\nif [[ -L $userdirs && $(readlink "$userdirs") == /nix/store/* ]]; then hm_userdirs=1; fi\nfor d in TEMPLATES:Templates PUBLICSHARE:Public DESKTOP:Desktop; do\n  if [[ $hm_userdirs == 0 ]] && ! grep -q "^XDG_''${d%%:*}_DIR=" "$userdirs" 2>/dev/null; then\n    xdg-user-dirs-update --set "''${d%%:*}" "$HOME"\n    rmdir "$HOME/''${d#*:}" 2>/dev/null || true\n  fi\ndone' \
+          --replace-fail '  grep -q "^XDG_''${dir%%:*}_DIR=" "''${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs" 2>/dev/null ||' \
+            '  [[ $hm_userdirs == 1 ]] || grep -q "^XDG_''${dir%%:*}_DIR=" "$userdirs" 2>/dev/null ||' \
           --replace-fail 'rmdir ~/Templates ~/Public ~/Desktop 2>/dev/null || true' ':' \
           --replace-fail $'env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings set default-web-browser chromium.desktop\nxdg-mime default HEY.desktop x-scheme-handler/mailto' \
             $'mimeapps="''${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"\nlegacy_mimeapps="''${XDG_DATA_HOME:-$HOME/.local/share}/applications/mimeapps.list"\nif [[ ! -L $mimeapps || $(readlink "$mimeapps") != /nix/store/* ]]; then\n  if omarchy-pkg-present chromium && ! grep -qE "^(x-scheme-handler/http|text/html)=" "$mimeapps" 2>/dev/null && ! grep -qE "^(x-scheme-handler/http|text/html)=" "$legacy_mimeapps" 2>/dev/null; then\n    env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings set default-web-browser chromium.desktop\n  fi\n  if [[ -z $(XDG_CURRENT_DESKTOP= xdg-mime query default x-scheme-handler/mailto 2>/dev/null) ]] && ! grep -q "^x-scheme-handler/mailto=" "$mimeapps" 2>/dev/null && ! grep -q "^x-scheme-handler/mailto=" "$legacy_mimeapps" 2>/dev/null; then\n    xdg-mime default HEY.desktop x-scheme-handler/mailto\n  fi\nfi'

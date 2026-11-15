@@ -217,6 +217,13 @@ pkgs.runCommand "omarchy-multi-de-check" { } ''
   ! grep -q 'user-dir DESKTOP=' "$LOG" || fail "provision-user overwrote XDG_DESKTOP_DIR"
   ! grep -qE '^xdg-(settings|mime) ' "$LOG" || fail "provision-user overwrote ~/.config/mimeapps.list defaults: $(cat "$LOG")"
 
+  # 6b2. Store-symlinked user-dirs.dirs with keys missing (HM omits null dirs) -> no --set at all.
+  H=$TMPDIR/prov-store-userdirs
+  mkdir -p "$H/.config"
+  ln -s /nix/store/00000000000000000000000000000000-hm_userdirs.dirs "$H/.config/user-dirs.dirs"
+  run_provision CHROMIUM_PRESENT=1 ACTIVE_MAILTO=""
+  ! grep -q '^user-dir ' "$LOG" || fail "provision-user wrote through store-symlinked user-dirs.dirs: $(cat "$LOG")"
+
   # 6c. Legacy ~/.local/share/applications/mimeapps.list -> respected too.
   H=$TMPDIR/prov-legacy-mime
   mkdir -p "$H/.local/share/applications"
