@@ -443,7 +443,7 @@ let
         # with no menu entries replacing them; install them with
         # omarchy-nix-search. xournalpp was replaced by Signed, which ships
         # via omarchy.appPackages (pkgs/signed.nix).)
-        libreoffice-fresh
+        libreoffice
         obsidian
         pinta
         localsend
@@ -739,15 +739,18 @@ in
             + "attribute name (e.g. \"libreoffice-fresh\", \"qt6.qtwayland\"); dependencies of "
             + "other packages cannot be excluded."
           ) unmatchedExcludes
-          ++ lib.optional (
-            options ? home-manager
-            && (config.home-manager.users or { }) != { }
-            && !lib.any (u: u.omarchy.enable or false) (lib.attrValues config.home-manager.users)
-          ) (
-            "omarchy.enable is true on NixOS, but no user in home-manager.users has omarchy.enable = true. "
-            + "Import nix-omarchy.homeModules.default into Home Manager and set home-manager.users.<name>.omarchy.enable = true "
-            + "so ~/.config/hypr/hyprland.lua is seeded."
-          );
+          ++
+            lib.optional
+              (
+                options ? home-manager
+                && (config.home-manager.users or { }) != { }
+                && !lib.any (u: u.omarchy.enable or false) (lib.attrValues config.home-manager.users)
+              )
+              (
+                "omarchy.enable is true on NixOS, but no user in home-manager.users has omarchy.enable = true. "
+                + "Import nix-omarchy.homeModules.default into Home Manager and set home-manager.users.<name>.omarchy.enable = true "
+                + "so ~/.config/hypr/hyprland.lua is seeded."
+              );
 
         # Font discovery for the runtime fonts above. (Mirrors the names in
         # runtimeDeps; kept explicit here because environment.systemPackages

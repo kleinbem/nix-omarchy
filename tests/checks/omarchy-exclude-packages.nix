@@ -1,8 +1,7 @@
 # omarchy.exclude_packages contract (docs/options.md): entries are
 # nixpkgs attribute names, matched against the module's own lists.
-#   - attribute names whose pname differs (libreoffice-fresh ->
-#     libreoffice, tesseract5 -> tesseract) or is shared (qt5/qt6
-#     qtwayland) remove exactly that package;
+#   - attribute names whose pname differs (tesseract5 -> tesseract) or is
+#     shared (qt5/qt6 qtwayland) remove exactly that package;
 #   - plain package names keep working (obsidian, the flake-injected
 #     owe app, whose owed unit follows it);
 #   - excluding chromium also drops the chromium.desktop alias built
@@ -22,7 +21,7 @@ let
       modules = [
         {
           omarchy.exclude_packages = [
-            "libreoffice-fresh"
+            "libreoffice"
             "tesseract5"
             "qt5.qtwayland"
             "obsidian"
@@ -42,8 +41,8 @@ let
     w: builtins.match ".*omarchy.exclude_packages.*" w != null
   ) cfg.warnings;
 in
-if has dpkgs.libreoffice-fresh then
-  throw "exclude_packages: \"libreoffice-fresh\" (pname libreoffice) did not remove it"
+if has dpkgs.libreoffice then
+  throw "exclude_packages: \"libreoffice\" did not remove it"
 else if has dpkgs.tesseract5 then
   throw "exclude_packages: \"tesseract5\" (pname tesseract) did not remove it"
 else if has dpkgs.qt5.qtwayland then

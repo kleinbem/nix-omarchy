@@ -22,7 +22,7 @@
   qt6,
   zlib,
   libwebp,
-  sourceHighlight,
+  source-highlight,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -57,7 +57,7 @@ stdenv.mkDerivation (finalAttrs: {
   enableParallelBuilding = true;
 
   qtWrapperArgs = [
-    "--prefix PATH : ${lib.makeBinPath [ sourceHighlight ]}"
+    "--prefix PATH : ${lib.makeBinPath [ source-highlight ]}"
   ];
 
   # hype.pro defines no install targets (upstream's bin/build only runs

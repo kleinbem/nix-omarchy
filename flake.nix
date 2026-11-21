@@ -204,7 +204,9 @@
           omacut = pkgs.callPackage ./pkgs/omacut.nix { };
           omawrite = pkgs.callPackage ./pkgs/omawrite.nix { };
           monologue = pkgs.callPackage ./pkgs/monologue.nix { };
-          hype = pkgs.callPackage ./pkgs/hype.nix { };
+          hype = pkgs.callPackage ./pkgs/hype.nix {
+            source-highlight = pkgs.source-highlight or pkgs.sourceHighlight;
+          };
           disktree = pkgs.callPackage ./pkgs/disktree.nix { };
           gliff = pkgs.callPackage ./pkgs/gliff.nix { };
           superwhisper = pkgs.callPackage ./pkgs/superwhisper.nix { };
