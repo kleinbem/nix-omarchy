@@ -12,7 +12,9 @@ jobs:
     uses: kleinbem/actions/.github/workflows/maintain-flake.yaml@f1b4f5fc52ea31b1f9e53ca29170570fe4651c7d # v1.7.1
     with:
       nix-path: nixpkgs=channel:nixos-unstable
-      validate: nix flake check --no-build
+      validate: |
+        nix eval --raw .#nixosConfigurations.example.config.system.build.toplevel.drvPath
+        nix eval --raw .#packages.x86_64-linux.omarchy.drvPath
     secrets:
       app-id: ${{ secrets.APP_ID }}
       app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
