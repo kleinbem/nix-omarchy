@@ -32,17 +32,18 @@
   wayland,
   wayland-scanner,
   wayland-protocols,
+  libdeflate,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "omasnap";
-  version = "1.21.0";
+  version = "1.26.2";
 
   src = fetchFromGitHub {
     owner = "omacom";
     repo = "omasnap";
     rev = "v${finalAttrs.version}";
-    hash = "sha256-kpoPb5F5yqcczBRUfENsEfv+BD67zQsTG9Ur6Bi3viE=";
+    hash = "sha256-4mNe+ZOaBV/nrSd9Wos+eBR+vb/1HQOrD5J2mlJ2uck=";
   };
 
   nativeBuildInputs = [
@@ -67,6 +68,7 @@ stdenv.mkDerivation (finalAttrs: {
     # ext-foreign-toplevel-list / ext-image-capture-source /
     # ext-image-copy-capture XMLs (patched in below).
     wayland-protocols
+    libdeflate
   ];
 
   postPatch = ''
