@@ -33,6 +33,7 @@
   wayland-scanner,
   wayland-protocols,
   libdeflate,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -89,6 +90,8 @@ stdenv.mkDerivation (finalAttrs: {
     install -Dm644 "${finalAttrs.src}/README.md" "$out/share/doc/omasnap/README.md"
     install -Dm644 "${finalAttrs.src}/LICENSE" "$out/share/licenses/omasnap/LICENSE"
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Native Wayland screenshot and annotation overlay for Hyprland (Omarchy app)";

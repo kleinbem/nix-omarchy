@@ -1,0 +1,149 @@
+name: "Update packages"
+
+# One PR per package for every pkgs/*.nix whose passthru.updateScript is
+# nix-update-script (scripts/update-packages.sh list). Builds each bumped
+# package on the runner before opening a signed auto-merge PR.
+
+on:
+  schedule:
+    # Mondays 05:30 UTC.
+    - cron: '30 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Only this attribute (empty: all)"
+        required: false
+        default: ""
+
+permissions: {}
+
+jobs:
+  list:
+    name: "List packages"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: kleinbem/actions/nix-setup@d5aec5d8fbed30867e0b2c1d781992844240ee1e # v1.10.0
+      - name: List
+        id: list
+        env:
+          ONLY: ${{ inputs.package }}
+        run: |
+          matrix=$(./scripts/update-packages.sh list |
+            jq -c --arg only "$ONLY" '[.[] | select($only == "" or .attr == $only) | .attr]')
+          echo "$matrix"
+          [[ $matrix != "[]" ]] || { echo "no package matches" >&2; exit 1; }
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  update:
+    name: "Update ${{ matrix.attr }}"
+    needs: list
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: update-packages-${{ matrix.attr }}
+    strategy:
+      fail-fast: false
+      matrix:
+        attr: ${{ fromJSON(needs.list.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: kleinbem/actions/nix-setup@d5aec5d8fbed30867e0b2c1d781992844240ee1e # v1.10.0
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Update, build and test
+        id: update
+        env:
+          ATTR: ${{ matrix.attr }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          msg=$(mktemp)
+          ./scripts/update-packages.sh update "$ATTR" --write-commit-message "$msg"
+          if [[ -z $(git status --porcelain) ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          delim="EOF_BODY_$(openssl rand -hex 8)"
+          {
+            echo "changed=true"
+            echo "title=$(head -1 "$msg")"
+            echo "body<<$delim"
+            tail -n +2 "$msg"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        if: steps.update.outputs.changed == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      # Commits through createCommitOnBranch so GitHub signs the commit;
+      # main requires signed commits.
+      - name: Open PR
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ATTR: ${{ matrix.attr }}
+          TITLE: ${{ steps.update.outputs.title }}
+          BODY: ${{ steps.update.outputs.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          branch="auto-update/$ATTR"
+          tmp_branch="auto-update/$ATTR-tmp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          main_sha=$(git rev-parse HEAD)
+          cleanup() {
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$tmp_branch" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          gh api "repos/$REPO/git/refs" -f ref="refs/heads/$tmp_branch" -f sha="$main_sha" >/dev/null
+
+          additions=$(mktemp)
+          git ls-files -m -o --exclude-standard | while read -r f; do
+            base64 -w0 "$f" | jq -Rs --arg p "$f" '{path: $p, contents: .}'
+          done | jq -s . > "$additions"
+          new_sha=$(jq -n \
+            --arg repo "$REPO" --arg branch "$tmp_branch" --arg sha "$main_sha" \
+            --arg headline "$TITLE" --slurpfile additions "$additions" \
+            --arg query 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }' \
+            '{query: $query, variables: {input: {
+                branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+                message: {headline: $headline},
+                expectedHeadOid: $sha,
+                fileChanges: {additions: $additions[0]}
+            }}}' | gh api graphql --input - --jq '.data.createCommitOnBranch.commit.oid')
+          [[ -n $new_sha && $new_sha != null ]] || { echo "createCommitOnBranch failed" >&2; exit 1; }
+
+          if gh api "repos/$REPO/git/ref/heads/$branch" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$new_sha" -F force=true >/dev/null
+          else
+            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$new_sha" >/dev/null
+          fi
+
+          body=$(printf '%s\n\n%s\n\n---\n%s\n' "$BODY" \
+            "nix-update built it (and ran passthru.tests, if any) on the runner." \
+            "🤖 Opened by the update-packages workflow.")
+          open=$(gh pr list -R "$REPO" --head "$branch" --state open --json number --jq length)
+          if [[ $open != 0 ]]; then
+            gh pr edit "$branch" -R "$REPO" --title "$TITLE" --body "$body"
+          else
+            gh pr create -R "$REPO" --title "$TITLE" --body "$body" \
+              --head "$branch" --base main --label automated
+          fi
+          gh pr merge "$branch" -R "$REPO" --squash --delete-branch --auto

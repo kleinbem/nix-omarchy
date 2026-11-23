@@ -42,6 +42,7 @@
   zstd,
   pkg-config,
   git,
+  nix-update-script,
 }:
 
 let
@@ -93,6 +94,8 @@ rustPlatform.buildRustPackage {
   '';
 
   doCheck = false;
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Terminal workspace manager for AI coding agents (Omarchy)";

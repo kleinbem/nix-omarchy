@@ -35,6 +35,7 @@
   webkitgtk_4_1,
   gtk3,
   glib,
+  nix-update-script,
 }:
 
 let
@@ -59,7 +60,7 @@ let
   # Svelte/Vite frontend -> frontend/dist (consumed via //go:embed).
   frontend = stdenvNoCC.mkDerivation {
     pname = "aether-frontend";
-    inherit version src;
+    inherit version src npmDeps;
     sourceRoot = "${src.name}/frontend";
 
     nativeBuildInputs = [ nodejs_22 ];
@@ -135,6 +136,16 @@ buildGoModule (_finalAttrs: {
     install -Dm644 assets/aether-icon-512.png \
       "$out/share/icons/hicolor/512x512/apps/aether.png"
   '';
+
+  passthru = {
+    inherit frontend;
+    updateScript = nix-update-script {
+      extraArgs = [
+        "--subpackage"
+        "frontend"
+      ];
+    };
+  };
 
   meta = {
     description = "Native Omarchy theming app — extract wallpaper colors and apply cohesive desktop themes";
