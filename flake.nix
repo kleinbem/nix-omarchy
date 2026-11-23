@@ -145,6 +145,9 @@
             inputs.hyprland.inputs.nixpkgs.legacyPackages.${system}.callPackage
               ./pkgs/omarchy-hyprland-titlebars.nix
               { hyprland = inputs.hyprland.packages.${system}.hyprland; };
+          hyprexpo = inputs.hyprland.inputs.nixpkgs.legacyPackages.${system}.callPackage ./pkgs/hyprexpo.nix {
+            hyprland = inputs.hyprland.packages.${system}.hyprland;
+          };
         in
         {
           omarchy = pkgs.callPackage ./pkgs/omarchy.nix {
@@ -220,6 +223,7 @@
           # Built against the hyprland input (see the let binding above);
           # re-exported so nixosModules can inject it via omarchy.appPackages.
           omarchy-hyprland-titlebars = hyprland-titlebars;
+          inherit hyprexpo;
           hyprland-preview-share-picker = pkgs.callPackage ./pkgs/hyprland-preview-share-picker.nix { };
           omarchy-nvim = pkgs.callPackage ./pkgs/omarchy-nvim.nix { };
           omarchy-fish = pkgs.callPackage ./pkgs/omarchy-fish.nix { };
