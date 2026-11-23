@@ -1,9 +1,6 @@
 # Replace this with your generated hardware-configuration.nix:
 #   nixos-generate-config --show-hardware-config > hardware-configuration.nix
 {
-  config,
-  lib,
-  pkgs,
   modulesPath,
   ...
 }:

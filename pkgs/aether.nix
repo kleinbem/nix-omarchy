@@ -89,7 +89,7 @@ let
     '';
   };
 in
-buildGoModule (finalAttrs: {
+buildGoModule (_finalAttrs: {
   pname = "aether";
   inherit version src;
 

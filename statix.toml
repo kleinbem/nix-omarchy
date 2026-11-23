@@ -1,0 +1,3 @@
+# Keep upstream omarchy-nix dotted-attribute style in modules/tests so
+# upstream syncs stay conflict-free; all other statix lints remain active.
+disabled = ["repeated_keys"]

@@ -18,7 +18,7 @@
   ...
 }:
 let
-  lib = nixpkgs.lib;
+  inherit (nixpkgs) lib;
   base = {
     system.stateVersion = "26.05";
     # A real consumer has graphics enabled (via their desktop or

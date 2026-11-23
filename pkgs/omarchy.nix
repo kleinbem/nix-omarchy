@@ -101,7 +101,7 @@ let
   '';
 in
 
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation (_finalAttrs: {
   pname = "omarchy";
   # The upstream `version` file (e.g. "4.0.0.alpha") carries a trailing
   # newline; trim it so `nix derivation show` and meta.position stay clean.
@@ -661,7 +661,7 @@ stdenv.mkDerivation (finalAttrs: {
             exit 0
             OMARCHY_NIX_STUB
                         chmod +x bin/${name}
-          '') (lib.filterAttrs (n: m: m.class == "declarative-note") runtimeManifest.scripts)
+          '') (lib.filterAttrs (_n: m: m.class == "declarative-note") runtimeManifest.scripts)
         )}
 
         # nixos-adapted (hand rewrites — user-state flows kept, system

@@ -62,8 +62,6 @@
       self,
       nixpkgs,
       omarchy-src,
-      hyprland,
-      home-manager,
       ...
     }:
     let
@@ -72,7 +70,7 @@
       # arch was broken-by-declaration. Re-add when the checks evaluate
       # there (tracked on the dev tracker).
       systems = [ "x86_64-linux" ];
-      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
+      forAllSystems = f: nixpkgs.lib.genAttrs systems f;
 
       # Read the upstream version file (e.g. "4.0.0.alpha"). It carries a
       # trailing newline — trim it once here so every consumer (package names,
@@ -157,11 +155,11 @@
             # bluez-tools provides bt-agent (not bluez); tailscale is only used
             # for ConditionPathExists / ExecStart path rewrite — the unit is
             # shipped but not enabled by the module.
-            fcitx5 = pkgs.fcitx5;
-            bluez-tools = pkgs.bluez-tools;
-            pipewire = pkgs.pipewire;
-            systemd = pkgs.systemd;
-            tailscale = pkgs.tailscale;
+            inherit (pkgs) fcitx5;
+            inherit (pkgs) bluez-tools;
+            inherit (pkgs) pipewire;
+            inherit (pkgs) systemd;
+            inherit (pkgs) tailscale;
             # The vendored workspace-modes.lua loads titlebars.so from a
             # store path substituted at build time (see pkgs/omarchy.nix).
             hyprlandTitlebars = hyprland-titlebars;

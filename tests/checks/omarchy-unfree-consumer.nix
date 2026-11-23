@@ -13,7 +13,7 @@
   ...
 }:
 let
-  lib = nixpkgs.lib;
+  inherit (nixpkgs) lib;
   sys = nixpkgs.lib.nixosSystem {
     system = "x86_64-linux";
     modules = [

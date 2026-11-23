@@ -40,7 +40,7 @@ let
           system.stateVersion = "26.05";
           users.users = lib.mapAttrs (_: _: { isNormalUser = true; }) users;
           home-manager.useGlobalPkgs = true;
-          home-manager.users = lib.mapAttrs (name: module: {
+          home-manager.users = lib.mapAttrs (_name: module: {
             imports = [ module ];
             home.stateVersion = "26.05";
             omarchy.enable = true;

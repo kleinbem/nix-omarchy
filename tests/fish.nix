@@ -21,7 +21,6 @@
 # plumbing, not desktop. Modelled on tests/desktop.nix's node structure.
 {
   pkgs,
-  lib,
   omarchy,
   home-manager,
   ...
@@ -33,7 +32,6 @@
 
   nodes.machine =
     {
-      config,
       ...
     }:
     {

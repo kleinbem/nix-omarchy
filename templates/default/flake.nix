@@ -15,7 +15,6 @@
 
   outputs =
     {
-      self,
       nixpkgs,
       nix-omarchy,
       home-manager,

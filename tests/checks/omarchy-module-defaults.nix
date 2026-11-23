@@ -27,7 +27,7 @@
   ...
 }:
 let
-  lib = nixpkgs.lib;
+  inherit (nixpkgs) lib;
   demo = self.nixosConfigurations.demo;
   ext = m: (demo.extendModules { modules = [ m ]; }).config;
   mkConfig =

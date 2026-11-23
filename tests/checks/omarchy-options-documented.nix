@@ -9,7 +9,7 @@
   ...
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   schema = (import ../../config.nix { inherit lib; }).omarchyOptions;
   # Collect leaf option paths ("enable", "autologin.user", ...).
   # mkOption values are attrsets too, so test lib.isOption BEFORE

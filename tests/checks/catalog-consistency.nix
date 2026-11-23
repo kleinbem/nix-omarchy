@@ -6,7 +6,6 @@
 # net for hidden unfree deps / getName mismatches / throw-aliases).
 {
   self,
-  inputs,
   nixpkgs,
   pkgs,
   system,
@@ -54,7 +53,7 @@ let
   missingFeatureProbes = lib.subtractLists probeFeatureNames catalogFeatureNames;
   extraFeatureProbes = lib.subtractLists catalogFeatureNames probeFeatureNames;
 
-  getName = pkg: pkg.pname or ((builtins.parseDrvName pkg.name).name);
+  getName = pkg: pkg.pname or (builtins.parseDrvName pkg.name).name;
 
   # A nixpkgs instance that allows exactly these unfree names (+ base
   # obsidian) and insecure names: the consumer-style whitelist.
@@ -77,13 +76,7 @@ let
     {
       unfreeNames = (e.unfreeNames or [ ]) ++ (featDef.unfreeNames or [ ]);
       insecureNames = e.insecureNames or [ ];
-      attrs =
-        if e ? pkgs then
-          e.pkgs
-        else if feat != null then
-          featureProbeAttrs.${feat} or [ ]
-        else
-          [ ];
+      attrs = e.pkgs or (if feat != null then featureProbeAttrs.${feat} or [ ] else [ ]);
     };
 
   # Force attr.drvPath; tryEval so we can collect all failures.

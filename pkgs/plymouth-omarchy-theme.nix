@@ -17,7 +17,7 @@
   version,
 }:
 
-stdenvNoCC.mkDerivation (finalAttrs: {
+stdenvNoCC.mkDerivation (_finalAttrs: {
   pname = "plymouth-omarchy-theme";
   inherit version;
 

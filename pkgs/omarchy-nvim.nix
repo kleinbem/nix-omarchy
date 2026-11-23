@@ -50,7 +50,7 @@ let
     hash = "sha256-oPh7/wliFihgYMoVZY/z1dYHKBMvUgV+PR9ijnPhX4I=";
   };
 in
-stdenvNoCC.mkDerivation (finalAttrs: {
+stdenvNoCC.mkDerivation (_finalAttrs: {
   pname = "omarchy-nvim";
   inherit version;
 
