@@ -15,12 +15,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: kleinbem/actions/nix-setup@f716d62182471a9e862ae0bd61d34201e6cea971 # v1.3.1
+      - uses: kleinbem/actions/nix-setup@d5aec5d8fbed30867e0b2c1d781992844240ee1e # v1.10.0
         with:
           nix-path: nixpkgs=channel:nixos-unstable
           free-disk-space: "true"
           netbird-setup-key: ${{ secrets.NETBIRD_SETUP_KEY_EPHEMERAL }}
           attic-token: ${{ secrets.ATTIC_PULL_TOKEN }}
+      - name: Check formatting
+        run: nix fmt -- --fail-on-change
       - name: Build omarchy package
         run: nix build -L --no-link .#packages.x86_64-linux.omarchy
       # Excludes VM checks and source-heavy checks that compile patched

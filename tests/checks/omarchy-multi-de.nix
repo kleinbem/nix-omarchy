@@ -18,11 +18,10 @@
 let
   inherit (pkgs) lib;
   omarchyPkg = self.packages.${system}.omarchy;
-  demoWithTailscale = (
-    self.nixosConfigurations.demo.extendModules {
+  demoWithTailscale =
+    (self.nixosConfigurations.demo.extendModules {
       modules = [ { services.tailscale.enable = true; } ];
-    }
-  ).config;
+    }).config;
 
   graphicalUserServices = lib.filterAttrs (
     _: svc:
