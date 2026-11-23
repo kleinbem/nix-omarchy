@@ -35,6 +35,7 @@
   webkitgtk_4_1,
   gtk3,
   glib,
+  nix-update-script,
 }:
 
 let
@@ -135,6 +136,8 @@ buildGoModule (_finalAttrs: {
     install -Dm644 assets/aether-icon-512.png \
       "$out/share/icons/hicolor/512x512/apps/aether.png"
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Native Omarchy theming app — extract wallpaper colors and apply cohesive desktop themes";

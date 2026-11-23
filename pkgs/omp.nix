@@ -22,6 +22,7 @@
   fetchurl,
   glibc,
   makeBinaryWrapper,
+  nix-update-script,
 }:
 stdenv.mkDerivation (finalAttrs: {
   pname = "omp";
@@ -62,6 +63,8 @@ stdenv.mkDerivation (finalAttrs: {
     }
     runHook postInstallCheck
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Coding agent with the IDE wired in";

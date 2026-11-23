@@ -51,6 +51,7 @@
   socat,
   python3,
   mesa,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -203,6 +204,8 @@ stdenv.mkDerivation (finalAttrs: {
     ctest --test-dir build-qml --output-on-failure
     runHook postCheck
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Wallpaper engine for Omarchy (video/GIF/still backgrounds) with the lock-screen video feed QML module";
