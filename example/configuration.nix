@@ -27,7 +27,7 @@
 #
 # The automated desktop test (checks.x86_64-linux.omarchy-desktop) exercises
 # the same module stack headlessly — see tests/desktop.nix.
-{ ... }:
+_:
 
 {
   # One line enables the whole system layer: vendored omarchy on PATH,

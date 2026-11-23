@@ -13,9 +13,9 @@
     file:
     (import file) {
       inherit pkgs;
-      lib = pkgs.lib;
+      inherit (pkgs) lib;
       omarchy = self;
-      home-manager = inputs.home-manager;
+      inherit (inputs) home-manager;
     };
   # The omarchy-options.nix loader written by omarchy-nix-add on the
   # first opt: pick. Single source of truth: the pkglib template in

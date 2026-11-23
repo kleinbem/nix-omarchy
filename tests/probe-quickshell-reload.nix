@@ -38,7 +38,6 @@
 #       repo = "quickshell"; tag = "v0.3.2"; hash = "sha256-..."; };
 #   });
 {
-  pkgs,
   lib,
   omarchy,
   home-manager,
@@ -56,7 +55,6 @@
 
   nodes.machine =
     {
-      config,
       pkgs,
       ...
     }:

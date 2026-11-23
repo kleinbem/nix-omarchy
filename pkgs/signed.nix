@@ -41,7 +41,7 @@ stdenv.mkDerivation (finalAttrs: {
     # the app links.
     (poppler.override {
       qt6Support = true;
-      qtbase = qt6.qtbase;
+      inherit (qt6) qtbase;
     })
     qpdf
     nss

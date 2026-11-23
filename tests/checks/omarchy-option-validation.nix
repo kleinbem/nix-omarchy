@@ -17,7 +17,7 @@
   ...
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   fmt = import ../../modules/lib/omarchy-formats.nix { inherit lib; };
   schema = (import ../../config.nix { inherit lib; }).omarchyOptions;
 

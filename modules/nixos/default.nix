@@ -862,12 +862,12 @@ in
                     # same-named nixpkgs attr (e.g. the first-party Grok CLI).
                     # All other attrs resolve against consumer nixpkgs,
                     # including nested paths selected by the package picker.
-                    if cfg.ownedPackages ? ${n} then
-                      cfg.ownedPackages.${n}
-                    else if lib.hasAttrByPath path pkgs then
-                      lib.getAttrFromPath path pkgs
-                    else
-                      throw "${toString cfg.managedPackagesFile}: unknown nixpkgs attribute '${n}'"
+                    cfg.ownedPackages.${n} or (
+                      if lib.hasAttrByPath path pkgs then
+                        lib.getAttrFromPath path pkgs
+                      else
+                        throw "${toString cfg.managedPackagesFile}: unknown nixpkgs attribute '${n}'"
+                    )
                   ) managedPkgs;
             }
           ]

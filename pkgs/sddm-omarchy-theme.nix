@@ -21,7 +21,7 @@
   version,
 }:
 
-stdenvNoCC.mkDerivation (finalAttrs: {
+stdenvNoCC.mkDerivation (_finalAttrs: {
   pname = "sddm-omarchy-theme";
   inherit version;
 

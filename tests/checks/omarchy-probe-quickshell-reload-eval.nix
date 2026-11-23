@@ -20,7 +20,7 @@ let
       import ../probe-quickshell-reload.nix {
         inherit pkgs lib qsOverride;
         omarchy = self;
-        home-manager = inputs.home-manager;
+        inherit (inputs) home-manager;
       }
     );
   variants = {

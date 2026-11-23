@@ -18,7 +18,7 @@
   ...
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   omarchyPkg = self.packages.${system}.omarchy;
   systemPath = self.nixosConfigurations.demo.config.system.path;
   # Programs the shell may start that the default system deliberately

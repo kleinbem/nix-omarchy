@@ -24,8 +24,6 @@
 #     Hyprland versions, we assert via quickshell IPC (which discovers its
 #     own instance) and the Wayland socket directly.
 {
-  pkgs,
-  lib,
   omarchy,
   home-manager,
   ...
@@ -37,7 +35,6 @@
 
   nodes.machine =
     {
-      config,
       ...
     }:
     {

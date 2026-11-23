@@ -15,14 +15,13 @@
 # the headers.
 {
   lib,
-  stdenv,
   fetchFromGitHub,
   cmake,
   pkg-config,
   hyprland,
 }:
 
-stdenv.mkDerivation (finalAttrs: {
+hyprland.stdenv.mkDerivation (finalAttrs: {
   pname = "omarchy-hyprland-titlebars";
   version = "0.2.2";
 

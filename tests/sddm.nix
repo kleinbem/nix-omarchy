@@ -18,8 +18,6 @@
 # Wayland greeter is the flakiness the other tests deliberately avoid (see
 # tests/desktop.nix).
 {
-  pkgs,
-  lib,
   omarchy,
   home-manager,
   ...
@@ -31,7 +29,6 @@
 
   nodes.machine =
     {
-      config,
       ...
     }:
     {

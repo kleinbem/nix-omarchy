@@ -4,6 +4,20 @@ All notable changes to omarchy-nix, newest first. Dates are UTC.
 Upstream adaptation details and the bump checklist:
 [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 
+## 2026-11-23
+
+- **Upstream Quattro pinned to `v4.5.0`** (`ac2690cd`), with multi-DE session
+  isolation, startup cursor crash guard, GC-safe first-run seeding, and
+  HM-owned `user-dirs.dirs` protection.
+- **`hyprexpo` overview plugin** (`sandwichfarm/hyprexpo`, pinned to its
+  Hyprland `0.56.2` ABI commit `59bf4d378c`) added as
+  `packages.<system>.hyprexpo`, built with `hyprland.stdenv.mkDerivation`.
+- **`omarchy-hyprland-titlebars`** switched to `hyprland.stdenv.mkDerivation`
+  so both Hyprland plugins share the compositor's exact compiler and
+  `libstdc++` ABI.
+- **CI hygiene:** added `nix fmt -- --fail-on-change` to `.github/workflows/ci.yaml`,
+  formatted the tree, and bumped `kleinbem/actions` workflows to `v1.10.0`.
+
 ## 2026-10-22
 
 - **Upstream Quattro moves from `33783b1` to `3c7027d` (206 commits).**

@@ -8,7 +8,7 @@
   ...
 }:
 let
-  lib = nixpkgs.lib;
+  inherit (nixpkgs) lib;
   services = self.nixosConfigurations.demo.config.systemd.user.services;
   shellCommands = [
     "omarchy-shell"

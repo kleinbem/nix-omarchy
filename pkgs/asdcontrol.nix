@@ -11,7 +11,7 @@
   fetchFromGitHub,
 }:
 
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation (_finalAttrs: {
   pname = "asdcontrol";
   version = "0.6.0";
 
