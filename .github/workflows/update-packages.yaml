@@ -74,12 +74,13 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          delim="EOF_BODY_$(openssl rand -hex 8)"
           {
             echo "changed=true"
             echo "title=$(head -1 "$msg")"
-            echo 'body<<EOF_BODY'
+            echo "body<<$delim"
             tail -n +2 "$msg"
-            echo EOF_BODY
+            echo "$delim"
           } >> "$GITHUB_OUTPUT"
 
       - name: Mint GitHub App installation token
@@ -104,19 +105,21 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           branch="auto-update/$ATTR"
+          tmp_branch="auto-update/$ATTR-tmp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           main_sha=$(git rev-parse HEAD)
-          if gh api "repos/$REPO/git/ref/heads/$branch" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$main_sha" -F force=true >/dev/null
-          else
-            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$main_sha" >/dev/null
-          fi
+          cleanup() {
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$tmp_branch" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          gh api "repos/$REPO/git/refs" -f ref="refs/heads/$tmp_branch" -f sha="$main_sha" >/dev/null
 
           additions=$(mktemp)
           git ls-files -m -o --exclude-standard | while read -r f; do
             base64 -w0 "$f" | jq -Rs --arg p "$f" '{path: $p, contents: .}'
           done | jq -s . > "$additions"
-          jq -n \
-            --arg repo "$REPO" --arg branch "$branch" --arg sha "$main_sha" \
+          new_sha=$(jq -n \
+            --arg repo "$REPO" --arg branch "$tmp_branch" --arg sha "$main_sha" \
             --arg headline "$TITLE" --slurpfile additions "$additions" \
             --arg query 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }' \
             '{query: $query, variables: {input: {
@@ -124,7 +127,14 @@ jobs:
                 message: {headline: $headline},
                 expectedHeadOid: $sha,
                 fileChanges: {additions: $additions[0]}
-            }}}' | gh api graphql --input -
+            }}}' | gh api graphql --input - --jq '.data.createCommitOnBranch.commit.oid')
+          [[ -n $new_sha && $new_sha != null ]] || { echo "createCommitOnBranch failed" >&2; exit 1; }
+
+          if gh api "repos/$REPO/git/ref/heads/$branch" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$new_sha" -F force=true >/dev/null
+          else
+            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$new_sha" >/dev/null
+          fi
 
           body=$(printf '%s\n\n%s\n\n---\n%s\n' "$BODY" \
             "nix-update built it (and ran passthru.tests, if any) on the runner." \
@@ -136,5 +146,4 @@ jobs:
             gh pr create -R "$REPO" --title "$TITLE" --body "$body" \
               --head "$branch" --base main --label automated
           fi
-          gh pr merge "$branch" -R "$REPO" --squash --delete-branch --auto ||
-            gh pr merge "$branch" -R "$REPO" --squash --delete-branch
+          gh pr merge "$branch" -R "$REPO" --squash --delete-branch --auto
