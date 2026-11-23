@@ -34,7 +34,6 @@
   lib,
   stdenv,
   fetchFromGitHub,
-  fetchurl,
   bash,
   meson,
   ninja,
@@ -56,24 +55,14 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "owe";
-  version = "0.2.10";
+  version = "0.2.18";
 
   src = fetchFromGitHub {
     owner = "omacom";
     repo = "owe";
     rev = "v${finalAttrs.version}";
-    hash = "sha256-8bRTpvxnh+uECUfgvMyeBU/hBOVfSxgStDfn+xBpph0=";
+    hash = "sha256-rO02nkNkghL+/4ZSDW99k3fUcHpUme3oPm1h90teWqs=";
   };
-
-  patches = [
-    # The authoritative Omarchy recipe carries this test-only fix: prepared
-    # intro invalidation must not depend on consecutive writes getting
-    # distinct filesystem timestamps.
-    (fetchurl {
-      url = "https://raw.githubusercontent.com/omacom/omarchy-pkgs/d58cb276a21f9dac37fa612e1850f93264510de6/pkgbuilds/owe/lock-policy-timestamp.patch";
-      hash = "sha256-Pr9BMJOSKwkXvKYMQnIMZCTHexaVMXNkv3P5/XRTdtg=";
-    })
-  ];
 
   nativeBuildInputs = [
     meson
@@ -96,6 +85,8 @@ stdenv.mkDerivation (finalAttrs: {
       --replace-fail '#!/usr/bin/env python3' '#!${python3}/bin/python3' \
       --replace-fail '#!/bin/sh' '#!${bash}/bin/sh'
     substituteInPlace test/startup.py \
+      --replace-fail '#!/bin/bash' '#!${bash}/bin/bash'
+    substituteInPlace test/busy_shell_handoff.py \
       --replace-fail '#!/bin/bash' '#!${bash}/bin/bash'
     substituteInPlace test/uninstall.sh \
       --replace-fail '#!/bin/sh' '#!${bash}/bin/sh'

@@ -38,13 +38,13 @@
 }:
 
 let
-  version = "4.31.1";
+  version = "4.33.0";
 
   src = fetchFromGitHub {
     owner = "omacom";
     repo = "aether";
     tag = "v${version}";
-    hash = "sha256-ZOFHeAUJrohcTtqaBNXnuqA19Cx+i6+k6clM+Cpx9X0=";
+    hash = "sha256-L72Zlxjer5b52+QCIoE5GSRadBEeBFFXw4estcHDZaQ=";
   };
 
   # fetcherVersion 2 fetches packuments, which npm install needs to resolve
