@@ -17,6 +17,7 @@
   ruby,
   bash,
   makeBinaryWrapper,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -60,6 +61,8 @@ stdenv.mkDerivation (finalAttrs: {
       --prefix PATH : ${lib.makeBinPath [ ruby ]}
     runHook postInstall
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Fresh directories for every vibe — manage experiment/worktree dirs (Omarchy component)";

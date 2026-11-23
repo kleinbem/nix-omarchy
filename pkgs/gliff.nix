@@ -18,6 +18,7 @@
   wayland,
   vulkan-loader,
   openssh,
+  nix-update-script,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -79,6 +80,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
       patchelf --add-rpath ${lib.makeLibraryPath [ vulkan-loader ]} "$out/bin/$program"
     done
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Hyprland remote desktop over SSH with GPU or CPU H.264 video";

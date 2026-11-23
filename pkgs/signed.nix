@@ -13,6 +13,7 @@
   poppler,
   qpdf,
   nss,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -60,6 +61,8 @@ stdenv.mkDerivation (finalAttrs: {
       "$out/share/applications/signed.desktop"
     runHook postInstall
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Sign PDFs and fill them in with text and dates (Omarchy app)";

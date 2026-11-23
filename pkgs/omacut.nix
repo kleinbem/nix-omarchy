@@ -7,6 +7,7 @@
   stdenv,
   fetchFromGitHub,
   qt6,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -44,6 +45,8 @@ stdenv.mkDerivation (finalAttrs: {
       "$out/share/applications/omacut.desktop"
     runHook postInstall
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Dead-simple video length trimmer (Omarchy app)";

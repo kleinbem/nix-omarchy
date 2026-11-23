@@ -23,6 +23,7 @@
   zlib,
   libwebp,
   source-highlight,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -73,6 +74,8 @@ stdenv.mkDerivation (finalAttrs: {
       "$out/share/applications/hype.desktop"
     runHook postInstall
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Simple Markdown presentations with a visual slide editor (Omarchy app)";
