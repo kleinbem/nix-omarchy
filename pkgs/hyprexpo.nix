@@ -7,7 +7,6 @@
 # up with the compositor. Pin matches hyprpm.toml's 0.56.2 entry.
 {
   lib,
-  stdenv,
   fetchFromGitHub,
   meson,
   ninja,
@@ -16,7 +15,7 @@
   hyprland,
 }:
 
-stdenv.mkDerivation {
+hyprland.stdenv.mkDerivation {
   pname = "hyprexpo";
   version = "0.56.2-unstable-2026-10-16";
 
