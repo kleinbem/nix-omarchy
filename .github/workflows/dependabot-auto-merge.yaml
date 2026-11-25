@@ -1,0 +1,16 @@
+name: Dependabot auto-merge
+
+# Shared policy: patch and minor bumps auto-merge, majors wait for a human.
+# APP_ID/APP_PRIVATE_KEY are Dependabot secrets (nix/infra/github-secrets.tf).
+on: pull_request
+
+permissions: {}
+
+jobs:
+  auto-merge:
+    permissions:
+      pull-requests: read
+    uses: kleinbem/actions/.github/workflows/dependabot-auto-merge.yaml@d5aec5d8fbed30867e0b2c1d781992844240ee1e # v1.10.0
+    secrets:
+      app-id: ${{ secrets.APP_ID }}
+      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}

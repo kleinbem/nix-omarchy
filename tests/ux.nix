@@ -1,0 +1,2195 @@
+# NixOS test: Omarchy (Quattro) UX / acceptance smoke test.
+#
+# Where tests/desktop.nix asserts the *processes* come up (Hyprland + the
+# quickshell bar), this test exercises *real user behavior* end to end:
+#   - a real Super+Enter keypress opens a foot terminal (the full dispatcher
+#     chain: Hyprland bind -> Lua dispatcher -> omarchy-launch-terminal ->
+#     xdg-terminal-exec -> foot), verified via hyprctl clients;
+#   - the session env the module ships (XDG_SESSION_DESKTOP, TERMINAL,
+#     OMARCHY_PATH; BROWSER deliberately absent since v4.0.0) is actually
+#     in the user activation environment;
+#   - the default-browser / cursor / first-run / systemd-user-unit wiring the
+#     module + HM layer set up is present and observable.
+#
+# Session launch: unlike tests/desktop.nix (which execs bare `Hyprland` from
+# tty1), this node execs the real uwsm session entry
+#   `uwsm start -e -D Hyprland hyprland.desktop`
+# from tty1. That is the faithful analogue of the module's
+# hyprland-uwsm.desktop (what SDDM runs on a real install): it sets
+# XDG_SESSION_DESKTOP=Hyprland and activates graphical-session.target (so the
+# omarchy-* systemd user units start). tty1 autologin is kept because driving
+# a Wayland display-manager greeter headlessly is flaky (see tests/desktop.nix);
+# uwsm itself needs no greeter.
+#
+# Key injection: machine.send_key("meta_l-ret") reaches the guest as a real
+# evdev keypress via QEMU's sendkey (QKeyCode meta_l = left Super, ret = Enter).
+# That is the kernel-level path, the same one ydotool/uinput takes on real
+# hardware and the ONLY path that reaches Hyprland's binding layer (Wayland
+# virtual-keyboard protocols like wtype do not). On an Incus VM guest
+# QMP sendkey is unavailable (incusd holds the monitor socket); the NixOS test
+# driver owns QMP, so send_key works here.
+{
+  pkgs,
+  lib,
+  omarchy,
+  home-manager,
+  ...
+}:
+
+let
+  # B18 exercises real Linux process names and /proc/<pid>/exe, without
+  # requiring a hardware encoder. SIGINT records delivery and exits cleanly.
+  recorderFixture =
+    pkgs.runCommand "omarchy-screenrecording-process-fixture"
+      {
+        nativeBuildInputs = [ pkgs.stdenv.cc ];
+      }
+      ''
+        mkdir -p $out/bin
+        cat > recorder.c <<'C'
+        #include <signal.h>
+        #include <stdio.h>
+
+        int main(int argc, char **argv) {
+          if (argc < 2) return 2;
+          sigset_t signals;
+          sigemptyset(&signals);
+          sigaddset(&signals, SIGINT);
+          if (sigprocmask(SIG_BLOCK, &signals, NULL)) return 3;
+          char ready[4096];
+          if (snprintf(ready, sizeof ready, "%s.ready", argv[1]) >= sizeof ready) return 4;
+          FILE *file = fopen(ready, "w");
+          if (!file) return 4;
+          fputs("ready\n", file);
+          fclose(file);
+          int received;
+          if (sigwait(&signals, &received)) return 5;
+          file = fopen(argv[1], "w");
+          if (!file) return 6;
+          fputs("INT\n", file);
+          fclose(file);
+          return 0;
+        }
+        C
+        $CC recorder.c -o $out/bin/gpu-screen-recorder
+        cp $out/bin/gpu-screen-recorder $out/bin/wf-recorder
+        cp $out/bin/gpu-screen-recorder $out/bin/gpu-screen-recorder-helper
+      '';
+in
+{
+  name = "omarchy-ux";
+  meta.maintainers = [ ];
+
+  nodes.machine =
+    {
+      config,
+      ...
+    }:
+    {
+      imports = [
+        omarchy.nixosModules.default
+        home-manager.nixosModules.home-manager
+      ];
+
+      virtualisation.qemu.options = [ "-vga none -device virtio-gpu-pci" ];
+      virtualisation.memorySize = 4096;
+      virtualisation.cores = 4;
+
+      omarchy.enable = true;
+      omarchy.full_name = "Test User";
+      omarchy.email_address = "test@omarchy-nix.invalid";
+      # Opt the test node into fingerprint lock auth so (4h) can assert the
+      # omarchy-lock-fingerprint service exists; default-off is covered by the
+      # eval-time omarchy-pam-eval check on the demo config.
+      omarchy.fingerprint.enable = true;
+
+      # The NixOS test instrumentation force-disables timesyncd (deterministic
+      # guest clock); real NixOS defaults it on. Re-enable so the (4i) live
+      # run of omarchy-update-time exercises the menu update.time path.
+      services.timesyncd.enable = lib.mkForce true;
+
+      environment.systemPackages = [
+        pkgs.pamtester
+        # (10) behavioral contract: tesseract+grim for the rendered-notification
+        # OCR assertion, imagemagick for the deterministic OCR preprocessing
+        # (raw full-screen OCR cannot read the bold notification title).
+        # pactl is NOT listed here — volume media-key scripts require it from
+        # omarchy runtimeDeps (issue #1 regression guard).
+        pkgs.tesseract
+        pkgs.imagemagick
+      ];
+
+      # Menu-managed packages fixture: proves JSON -> systemPackages and the
+      # unfree whitelist extension at eval time. On real systems this file is
+      # written by omarchy-nix-add/remove (Task 2 scripts).
+      #
+      # A real file under tests/fixtures, not builtins.toFile: the module
+      # reads it with builtins.pathExists, and --no-build evaluation cannot
+      # realise a toFile path that a GC removed ("path ... is not valid").
+      # The environment.etc entry mirrors it at /etc/nixos/ for runtime tools
+      # (omarchy-pkg-present).
+      environment.etc."nixos/omarchy-packages.json".source = ./fixtures/managed-packages-ux.json;
+      # Stub flake.nix alongside the JSON fixture so omarchy-pkg-present's
+      # resolve_json() (which gates on flake.nix + omarchy-packages.json being
+      # co-located) finds the fixture and the JSON membership path is exercised
+      # by the (4d) truth table, not just the binary-probe fallback.
+      environment.etc."nixos/flake.nix".text = "# omarchy-ux test stub";
+      omarchy.managedPackagesFile = ./fixtures/managed-packages-ux.json;
+
+      # (4i) the xpadneo feature entry must evaluate to the real
+      # kernel-module option (managedFeatureDefs.xpadneo in the nixos module).
+      assertions = [
+        {
+          assertion = config.hardware.xpadneo.enable;
+          message = "xpadneo feature in omarchy-packages.json did not enable hardware.xpadneo";
+        }
+      ];
+
+      users.users.demo = {
+        isNormalUser = true;
+        uid = 1000;
+        password = "demo";
+        extraGroups = [
+          "wheel"
+          "video"
+          "input"
+        ];
+      };
+
+      home-manager.users.demo = {
+        imports = [ omarchy.homeModules.default ];
+        home.username = "demo";
+        home.homeDirectory = "/home/demo";
+        home.stateVersion = "26.05";
+        omarchy.enable = true;
+      };
+
+      # Test variant: tty1 autologin into the uwsm-managed Hyprland session
+      # (the headless analogue of SDDM -> hyprland-uwsm.desktop on a real
+      # install). SDDM stays disabled so the wayland.enable / xserver assertion
+      # does not fire (see tests/desktop.nix).
+      services.displayManager.sddm.enable = false;
+      services.getty.autologinUser = "demo";
+      programs.bash.loginShellInit = ''
+        if [ "$(tty)" = "/dev/tty1" ]; then
+          exec uwsm start -e -D Hyprland hyprland.desktop >/tmp/hyprland.log 2>&1
+        fi
+      '';
+    };
+
+  testScript = ''
+    import collections
+    import difflib
+    import json
+    import re
+    import subprocess
+    import sys
+
+    ${builtins.readFile ./checks/jsonc.py}
+
+    machine.start()
+
+    # --- (1) Baseline: the compositor + shell are up. ----------------------
+    machine.wait_for_unit("multi-user.target")
+
+    # Hyprland's Wayland socket => the Lua config chain (bootstrap -> require
+    # default.hypr.omarchy -> user stubs) loaded and the compositor initialized.
+    machine.wait_for_file("/run/user/1000/wayland-1", timeout=120)
+
+    # quickshell registered its instance (shell.qml loaded against the pinned
+    # quickshell); same signal tests/desktop.nix relies on.
+    machine.wait_until_succeeds(
+        "su - demo -c 'quickshell list 2>/dev/null | grep -q .'",
+        timeout=60,
+    )
+
+    def as_demo(cmd):
+        # Run cmd as the demo user with the session env hyprctl and
+        # `systemctl --user` need. `su -` resets the environment, so we
+        # reconstruct XDG_RUNTIME_DIR, the session bus, and discover
+        # HYPRLAND_INSTANCE_SIGNATURE from the runtime dir (uwsm/Hyprland
+        # create /run/user/1000/hypr/<signature>). The wrapper groups cmd with
+        # single quotes, so cmd may use double quotes but not single quotes.
+        prefix = (
+            "export XDG_RUNTIME_DIR=/run/user/1000; "
+            "export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus; "
+            "export HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr | head -1); "
+        )
+        return "su - demo -c '" + prefix + cmd + "'"
+
+    # --- (1b) Session env: XDG_SESSION_DESKTOP=Hyprland. -------------------
+    # uwsm -D Hyprland sets this; Hyprland's autostart.lua then runs
+    # `systemctl --user import-environment $(env ...)` which pushes it into the
+    # user activation environment. This is the desktop-name parity the custom
+    # hyprland-uwsm.desktop exists to provide.
+    def session_env():
+        return machine.succeed(as_demo("systemctl --user show-environment"))
+
+    env = session_env()
+    assert "XDG_SESSION_DESKTOP=Hyprland" in env.splitlines(), \
+        "XDG_SESSION_DESKTOP=Hyprland missing from session env"
+
+    # --- (5) Session env: OMARCHY_PATH / TERMINAL (BROWSER absent). ------
+    # Pushed into the activation env by the same autostart import. The values
+    # come from environment.sessionVariables + uwsm env.d/10-omarchy; this
+    # proves the session the user actually sees has the omarchy bin on PATH
+    # and xdg-terminal-exec wired as TERMINAL. BROWSER is deliberately NOT
+    # session-wide since upstream v4.0.0 (it made xdg-settings refuse to
+    # change the default browser); interactive shells get it from
+    # default/bash/envs instead — so its absence here is the contract.
+    # OMARCHY_PATH must be the generation-independent stable profile path:
+    # every use re-resolves the active generation, so post-rebuild steps of
+    # `omarchy update` (migrations, hooks) see the new tree after a switch.
+    # A store-path value would freeze the tree at login.
+    assert "OMARCHY_PATH=/run/current-system/sw/share/omarchy" in env.splitlines(), \
+        "OMARCHY_PATH must be the stable system-profile path in the session env"
+    assert "BROWSER=omarchy-launch-browser" not in env.splitlines(), \
+        "BROWSER=omarchy-launch-browser must not be session-wide (v4.0.0)"
+    assert "TERMINAL=xdg-terminal-exec" in env.splitlines(), \
+        "TERMINAL=xdg-terminal-exec missing from session env"
+    # Issue #60: without NAUTILUS_4_EXTENSION_DIR Nautilus never loads
+    # libnautilus-python.so and the seeded Python extensions (localsend.py,
+    # transcode.py, user extensions) are dead. Delivered via
+    # environment.sessionVariables + uwsm env.d/10-omarchy.
+    assert "NAUTILUS_4_EXTENSION_DIR=/run/current-system/sw/lib/nautilus/extensions-4" \
+        in env.splitlines(), \
+        "NAUTILUS_4_EXTENSION_DIR missing from session env (issue #60)"
+
+    # OMARCHY_USER_NAME/EMAIL arrive via the systemd user manager's own
+    # environment.d processing — deliberately NOT via
+    # environment.sessionVariables: NixOS renders those into PAM's
+    # environment config, where a literal @ is a PAM item expansion — pam_env
+    # logs "Expandable variables must be wrapped in {}" and drops the value.
+    # (uwsm env.d alone is not sufficient either: the tty-autologin session
+    # path does not deliver it into the manager env.) Pin both delivery
+    # routes plus the absence of the PAM warning.
+    #
+    # Note: `systemctl show-environment` shell-escapes values containing
+    # spaces ("Test User" prints as $'Test User'), so match on content.
+    assert any(
+        l.startswith("OMARCHY_USER_NAME=") and "Test User" in l
+        for l in env.splitlines()
+    ), "OMARCHY_USER_NAME missing from session env (environment.d route)"
+    assert "OMARCHY_USER_EMAIL=test@omarchy-nix.invalid" in env.splitlines(), \
+        "OMARCHY_USER_EMAIL missing from session env (environment.d route)"
+    profile_email = machine.succeed("su - demo -c 'printf %s \"$OMARCHY_USER_EMAIL\"'")
+    assert profile_email == "test@omarchy-nix.invalid", \
+        "OMARCHY_USER_EMAIL missing from login-shell env (/etc/profile route): %r" % profile_email
+    _st, pam_warnings = machine.execute(
+        "journalctl -b --no-pager 2>/dev/null | grep -c 'Expandable variables' || true"
+    )
+    assert pam_warnings.strip() == "0", \
+        "pam_env 'Expandable variables' warnings in journal: %s" % pam_warnings
+
+    # --- (5c) GSETTINGS_SCHEMA_DIR: gtk3 FileChooser present (issue #62). ---
+    # The session var exists so first-run scripts can call bare gsettings, but
+    # GSETTINGS_SCHEMA_DIR is a *single* directory: pointing it only at
+    # gsettings-desktop-schemas drops gtk3 schemas, and Qt apps with
+    # QT_QPA_PLATFORMTHEME=gtk3 (upstream envs) then SIGABRT in Save/Open
+    # dialogs (org.gtk.Settings.FileChooser missing). The module merges
+    # desktop-schemas + gtk3 into one compiled dir; run the check with the
+    # session's own variable so a drift between env and content fails here.
+    gtk_keys = machine.succeed(as_demo(
+        "gsettings list-keys org.gtk.Settings.FileChooser"
+    )).split()
+    assert "last-folder-uri" in gtk_keys, \
+        "org.gtk.Settings.FileChooser keys missing under session GSETTINGS_SCHEMA_DIR (issue #62): %r" % gtk_keys
+    color_scheme = machine.succeed(as_demo(
+        "gsettings get org.gnome.desktop.interface color-scheme"
+    )).strip()
+    assert color_scheme in ("'default'", "'prefer-dark'", "'prefer-light'"), \
+        "org.gnome.desktop.interface broken under session GSETTINGS_SCHEMA_DIR: %r" % color_scheme
+
+    # --- (5b) Wired omarchy.* options: timezone + terminal list. -----------
+    # omarchy.timezone -> time.timeZone (mkDefault; nothing else in this test
+    # config sets it, so the module default Etc/UTC must win through).
+    # omarchy.terminal -> /etc/xdg/hyprland-xdg-terminals.list, which
+    # xdg-terminal-exec searches before the vendored data-dir fallback.
+    tz = machine.succeed("timedatectl show -p Timezone --value").strip()
+    assert tz == "Etc/UTC", \
+        "omarchy.timezone not wired to time.timeZone: %r" % tz
+    terms = machine.succeed("cat /etc/xdg/hyprland-xdg-terminals.list")
+    assert "foot.desktop" in terms.split(), \
+        "hyprland-xdg-terminals.list missing foot.desktop: %r" % terms
+
+    # --- (3) Default browser = chromium. -----------------------------------
+    # finalize-user (run from first-run on session start) does
+    # `xdg-settings set default-web-browser chromium.desktop`. The HM
+    # activation step sets the same association only when none exists (it
+    # calls xdg-settings by store path, since HM's activation PATH has no
+    # xdg-utils); in this VM `xdg-settings get` already resolves one from
+    # mimeinfo.cache, so the HM step is a no-op here and finalize-user's
+    # write is the one under test.
+    #
+    # Settle first-run before touching the association. The flaky failure this
+    # comment replaces (four VM runs, 2026-09-12/13) was a concurrent-writer
+    # race, not an xdg-settings bug: while first-run was still walking its
+    # steps, our `set` and finalize-user's own `set` could interleave, and
+    # xdg-settings verifies its write by re-reading the association — seeing
+    # the other writer's value it tried to restore the previous one, which is
+    # empty on a fresh home, and exited nonzero ("xdg-mime: application
+    # argument missing" was the restore call). Waiting for the done marker
+    # (also asserted in section (7)) removes the race at the source.
+    machine.wait_until_succeeds(
+        "test -f /home/demo/.local/state/omarchy/done/first-run-user",
+        timeout=180,
+    )
+
+    def browser_is_chromium(_last):
+        return machine.succeed(as_demo("xdg-settings get default-web-browser")).strip() == "chromium.desktop"
+
+    with machine.nested("waiting for default-web-browser to become chromium.desktop"):
+        retry(browser_is_chromium, timeout_seconds=60)
+
+    # Home Manager initializes the browser association only when it is absent.
+    # A user's explicit choice must survive a later activation, while the
+    # upstream first-run path still establishes Chromium on a fresh home.
+    # Set + verify as one retried pair: even after first-run settled, a stray
+    # writer (the HM activation unit) could still interleave with the single
+    # write, so a transient nonzero `set` is retried rather than fatal.
+    def browser_is(desktop, _last=False):
+        status, _ = machine.execute(
+            as_demo("env -u BROWSER xdg-settings set default-web-browser " + desktop)
+        )
+        current = machine.succeed(as_demo("xdg-settings get default-web-browser")).strip()
+        if status == 0 and current == desktop:
+            return True
+        if _last:
+            raise AssertionError(
+                "default-web-browser did not stick at %s (set exit %d, current %r)"
+                % (desktop, status, current)
+            )
+        return False
+
+    def set_browser(_last=False):
+        return browser_is("firefox.desktop", _last)
+
+    with machine.nested("setting default-web-browser to firefox.desktop"):
+        retry(set_browser, timeout_seconds=60)
+    machine.succeed("systemctl restart home-manager-demo.service")
+    assert machine.succeed(as_demo("xdg-settings get default-web-browser")).strip() == "firefox.desktop", \
+        "Home Manager activation reset the user's Firefox browser association"
+
+    # --- (4) Cursor mechanism (mechanism parity, not screenshot). ----------
+    # Upstream sets no cursor theme name; libxcursor resolves the theme named
+    # "default" via icons/default/index.theme -> Inherits=Adwaita. adwaita-icon-
+    # theme provides the actual cursors. `grim` cannot capture the hardware
+    # cursor plane, so presence is verified by the same files the upstream
+    # reference install has, not by screenshot.
+    machine.succeed("test -f /run/current-system/sw/share/icons/default/index.theme")
+    machine.succeed("grep -q Inherits=Adwaita /run/current-system/sw/share/icons/default/index.theme")
+    machine.succeed("test -s /run/current-system/sw/share/icons/Adwaita/cursors")
+
+    # --- (4b) Webapp icons (launcher Apps view). ----------------------------
+    # The vendored applications/*.desktop use bare icon names (Icon=chatgpt,
+    # Icon=disk-usage, Icon=google-contacts). pkgs/omarchy.nix installs the
+    # PNGs from applications/icons/ into share/icons/hicolor/256x256/apps/
+    # lowercased + hyphenated (upstream /usr/share/icons parity, verified on
+    # the Arch reference box). Without them the launcher shows blank tiles.
+    for icon in ["chatgpt", "disk-usage", "google-contacts", "youtube", "x"]:
+        machine.succeed(
+            "test -f /run/current-system/sw/share/icons/hicolor/256x256/apps/"
+            + icon + ".png"
+        )
+
+    # --- (4c) Dictation stack (voxtype + ydotool). --------------------------
+    # Voxtype remains a declarative alternative to the default Superwhisper;
+    # Arch voxtype-bin also installs Voxtype Configuration.desktop
+    # so Super+Space → Apps can open the TUI — assert that entry is present.
+    machine.succeed("test -f /run/current-system/sw/share/applications/voxtype-configure.desktop")
+    # The backend-independent dictation binding resolves the chosen backend.
+    # Voxtype's [output] mode = "type" needs ydotool, whose
+    # daemon is enabled via programs.ydotool.
+    machine.succeed("command -v voxtype")
+    machine.succeed("command -v ydotool")
+    machine.succeed("systemctl is-enabled --quiet ydotoold.service")
+
+    # New default apps must run in the desktop, with dictation's fresh-user
+    # integration ready and preferences editable outside the store.
+    assert machine.succeed(as_demo("omarchy-default-dictation")).strip() == "superwhisper"
+    machine.succeed(as_demo("superwhisper status >/dev/null"))
+    machine.wait_until_succeeds(as_demo(
+        "test -S /run/user/1000/superwhisper-fcitx5.sock"
+    ), timeout=30)
+    dictation_doctor = json.loads(machine.succeed(as_demo("superwhisper doctor --json")))
+    text_commit = next(c for c in dictation_doctor["checks"] if c["name"] == "text commit")
+    assert text_commit["status"] == "ok" and text_commit["detail"].startswith("fcitx5 addon "), text_commit
+    machine.succeed(as_demo("test -w ~/.config/superwhisper/preferences.json"))
+    machine.succeed(as_demo(
+        "test -e ~/.config/omarchy/plugins/superwhisper-panel/manifest.json"
+    ))
+    # The panel can offer choices only after its Python helper reads the
+    # live daemon; a missing interpreter must fail this IPC probe.
+    machine.wait_until_succeeds(as_demo(
+        "omarchy-shell superwhisper page tone | grep -qx ok"
+    ), timeout=30)
+    machine.succeed(as_demo("omarchy-shell superwhisper close"))
+    # Re-running initialization must preserve an explicit alternative.
+    machine.succeed(as_demo(
+        "printf \"%s\\n\" voxtype > ~/.config/omarchy/defaults/dictation; "
+        "bash $OMARCHY_PATH/install/user/first-run/dictation-superwhisper.sh"
+    ))
+    assert machine.succeed(as_demo("omarchy-default-dictation")).strip() == "voxtype"
+    machine.succeed(as_demo(
+        "printf \"%s\\n\" superwhisper > ~/.config/omarchy/defaults/dictation"
+    ))
+    # A failed write must make first-run retry instead of marking it done.
+    machine.succeed(as_demo(
+        "mkdir -p /tmp/ux-dictation-readonly/omarchy/defaults; "
+        "chmod 555 /tmp/ux-dictation-readonly/omarchy/defaults"
+    ))
+    machine.fail(as_demo(
+        "XDG_CONFIG_HOME=/tmp/ux-dictation-readonly "
+        "bash $OMARCHY_PATH/install/user/first-run/dictation-superwhisper.sh"
+    ))
+    machine.fail(as_demo("test -e ~/.agents/skills/omarchy-app"))
+    machine.fail(as_demo("omarchy-sudo-passwordless --active"))
+    machine.fail(as_demo("omarchy-sudo-passwordless --disable"))
+    # UWSM scopes inherit the caller's environment. Unlike the GUI launcher,
+    # su - has no WAYLAND_DISPLAY, so restore the live session's value.
+    wayland_display = next(
+        line.split("=", 1)[1] for line in session_env().splitlines()
+        if line.startswith("WAYLAND_DISPLAY=")
+    )
+    for app, launch in [("disktree", "disktree /home/demo"), ("gliff", "gliff"), ("superwhisper", "gtk-launch superwhisper")]:
+        machine.succeed(as_demo(
+            "WAYLAND_DISPLAY=" + wayland_display
+            + " setsid uwsm-app -- sh -c \"env > /tmp/ux-" + app
+            + "-env; exec " + launch + "\""
+            + " >/tmp/ux-" + app + ".log 2>&1 &"
+        ))
+        # GTK/winit app IDs and the Superwhisper terminal title each carry
+        # their application name; asserting a client proves visible startup.
+        probe = (
+            "hyprctl -j clients | jq -e \"any(.[]; "
+            "((.class + \\\" \\\" + .title) | ascii_downcase | contains(\\\""
+            + app + "\\\")))\""
+        )
+        try:
+            machine.wait_until_succeeds(as_demo(probe), timeout=45)
+        except Exception:
+            print(machine.succeed("cat /tmp/ux-" + app + ".log"))
+            print(machine.succeed(
+                "grep -E \"^(WAYLAND_DISPLAY|DISPLAY|XDG_RUNTIME_DIR|GDK_BACKEND)=\" "
+                "/tmp/ux-" + app + "-env || true"
+            ))
+            print(machine.succeed(as_demo("hyprctl -j clients")))
+            raise
+        address = machine.succeed(as_demo(
+            "hyprctl -j clients | jq -r \".[] | select("
+            "(.class + \\\" \\\" + .title) | ascii_downcase | contains(\\\""
+            + app + "\\\")) | .address\" | head -1"
+        )).strip()
+        machine.succeed(as_demo(
+            "hyprctl dispatch \"hl.dsp.window.close({ window = \\\"address:"
+            + address + "\\\" })\""
+        ))
+
+    # eval-side proof: the JSON fixture landed in the system profile
+    machine.succeed("command -v firefox")
+    machine.succeed("command -v steam")  # feature steam -> programs.steam.enable
+
+    # Docker.desktop still uses the TUI despite its omission from the new
+    # upstream package list. Exercise the real helper with a pkexec stand-in,
+    # so its clean environment receives NixOS executables and the terminal.
+    machine.succeed("lazydocker --version")
+    machine.succeed("mkdir -p /tmp/ux-docker-bin")
+    machine.succeed("cat > /tmp/ux-docker-bin/omarchy-sudo-docker <<'EOF'\n"
+        "#!${pkgs.bash}/bin/bash\nexit 0\nEOF")
+    machine.succeed("cat > /tmp/ux-docker-bin/pkexec <<'EOF'\n"
+        "#!${pkgs.bash}/bin/bash\nprintf '%s\\n' \"$@\" > /tmp/ux-docker-argv\nEOF")
+    machine.succeed("chmod +x /tmp/ux-docker-bin/*")
+    machine.succeed(as_demo(
+        "PATH=/tmp/ux-docker-bin:$PATH TERM=xterm-256color omarchy-launch-docker-tui"
+    ))
+    docker_argv = machine.succeed("cat /tmp/ux-docker-argv").splitlines()
+    assert docker_argv[0].startswith("/nix/store/") and docker_argv[0].endswith("/bin/env"), docker_argv
+    assert docker_argv[1:] == ["TERM=xterm-256color", "/run/current-system/sw/bin/lazydocker"], docker_argv
+    machine.succeed("test -x " + docker_argv[0])
+    machine.succeed("test -x " + docker_argv[-1])
+
+    # --- (4d) omarchy-pkg-present truth table (B9 reactivated) --------------
+    machine.succeed("omarchy-pkg-present firefox")        # packages entry in JSON fixture
+    machine.succeed("omarchy-pkg-present steam")          # features entry in JSON fixture
+    machine.succeed("omarchy-pkg-present foot")           # binary probe (runtimeDeps)
+    machine.succeed("omarchy-pkg-present voxtype-bin")    # alias -> binary probe
+    machine.fail("omarchy-pkg-present brave-bin")         # neither -> exit 1
+    machine.fail("omarchy-pkg-present microsoft-edge-stable-bin")
+
+    # --- (4e) omarchy-nix-add / omarchy-nix-remove (DRY-RUN, no rebuild) ----
+    # Declaration limit: OMARCHY_NIX_UPDATE_DRY_RUN=1 exercises JSON mutation
+    # + git intent-to-add only; it does not run a real nixos-rebuild / flake
+    # switch, so rebuild-time failures remain out of scope for this section.
+    machine.succeed("mkdir -p /tmp/consumer-flake")
+    machine.succeed("touch /tmp/consumer-flake/flake.nix")
+    env = "OMARCHY_NIX_FLAKE=/tmp/consumer-flake OMARCHY_NIX_UPDATE_DRY_RUN=1 "
+    machine.succeed(env + "omarchy-nix-add install.browser.firefox")
+    out = machine.succeed("cat /tmp/consumer-flake/omarchy-packages.json")
+    assert '"firefox"' in out, out
+    # idempotent: second add is a no-op and exits 0
+    machine.succeed(env + "omarchy-nix-add install.browser.firefox")
+    out = machine.succeed("cat /tmp/consumer-flake/omarchy-packages.json")
+    assert out.count("firefox") == 1, out
+    # feature entry lands in features, not packages
+    machine.succeed(env + "omarchy-nix-add install.gaming.steam")
+    out = machine.succeed("cat /tmp/consumer-flake/omarchy-packages.json")
+    assert '"steam"' in out, out
+    # unknown raw attribute: exit 1, JSON untouched
+    machine.fail(env + "omarchy-nix-add definitely-not-a-real-attr-xyz")
+    out = machine.succeed("cat /tmp/consumer-flake/omarchy-packages.json")
+    assert "definitely-not" not in out, out
+    # remove by entry id (feature) and by raw attr
+    machine.succeed(env + "omarchy-nix-remove install.gaming.steam")
+    machine.succeed(env + "omarchy-nix-remove firefox")
+    out = machine.succeed("cat /tmp/consumer-flake/omarchy-packages.json")
+    assert "steam" not in out and "firefox" not in out, out
+    # git-based consumer flake: JSON is registered with intent-to-add so the
+    # flake snapshot (which only sees tracked files) includes it at eval time
+    machine.succeed("git -C /tmp/consumer-flake init -q")
+    machine.succeed(env + "omarchy-nix-add install.browser.firefox")
+    out = machine.succeed("git -C /tmp/consumer-flake ls-files")
+    assert "omarchy-packages.json" in out, out
+    # early-exit (already installed) retries the registration without failing
+    machine.succeed(env + "omarchy-nix-add install.browser.firefox")
+    out = machine.succeed("git -C /tmp/consumer-flake ls-files")
+    assert "omarchy-packages.json" in out, out
+    # batch: multiple ids in one call = one transaction, and every
+    # operation leaves a durable audit log under the state dir
+    machine.succeed(env + "omarchy-nix-add install.gaming.steam install.gaming.xbox-controllers")
+    out = machine.succeed("cat /tmp/consumer-flake/omarchy-packages.json")
+    assert '"steam"' in out and '"xpadneo"' in out, out
+    machine.succeed(env + "omarchy-nix-remove install.gaming.steam install.gaming.xbox-controllers")
+    out = machine.succeed("cat /tmp/consumer-flake/omarchy-packages.json")
+    assert "steam" not in out and "xpadneo" not in out, out
+    machine.succeed("ls /root/.local/state/omarchy/nix-add/*.log")
+
+    # --- (4f) zram swap + zswap off (upstream parity, B2) -------------------
+    swaps = machine.succeed("cat /proc/swaps")
+    assert "/dev/zram0" in swaps, swaps
+    pri = machine.succeed("swapon --show=PRIO --noheadings /dev/zram0").strip()
+    assert pri == "100", pri
+    alg = machine.succeed("cat /sys/class/block/zram0/comp_algorithm")
+    assert "[zstd]" in alg, alg
+    zswap = machine.succeed("cat /sys/module/zswap/parameters/enabled").strip()
+    assert zswap == "N", zswap
+
+    # omarchy-nix-search: non-interactive filter mode over a fixture index
+    machine.succeed("mkdir -p /tmp/idx")
+    machine.succeed("printf 'firefox\\tWeb browser\\t153.0\\nhtop\\tProcess viewer\\t3.3.0\\n' > /tmp/idx/index.tsv")
+    out = machine.succeed("OMARCHY_NIX_INDEX_FILE=/tmp/idx/index.tsv omarchy-nix-search --filter fire")
+    assert "firefox" in out and "htop" not in out, out
+
+    # omarchy-file-select: store-python shebang; an unknown option
+    # exits 2 with the script's own message (proves interpreter + gi imports
+    # work headless — the script sets add_help=False, so --help is
+    # intentionally absent; before the fix this died with bad interpreter).
+    out = machine.succeed("head -1 /run/current-system/sw/share/omarchy/bin/omarchy-file-select")
+    assert "/nix/store" in out, out
+    _rc, out = machine.execute("omarchy-file-select --definitely-unknown 2>&1")
+    assert _rc == 2 and "unknown option" in out, out
+    # agent-usage scanners (v4.0.0: standalone bin scripts with store
+    # python shebangs, replaced the shell/plugins/model-usage QML providers)
+    machine.succeed(
+        "/run/current-system/sw/share/omarchy/bin/omarchy-agent-usage-claude --help >/dev/null"
+    )
+
+    # menu rewiring is live in the vendored tree
+    menu = machine.succeed("cat /run/current-system/sw/share/omarchy/default/omarchy/omarchy-menu.jsonc")
+    assert menu.count("omarchy-nix-add") >= 44, menu.count("omarchy-nix-add")
+    assert menu.count("omarchy-nix-remove") >= 12, menu.count("omarchy-nix-remove")
+    assert "omarchy-nix-search" in menu
+
+    # --- (4g) migrations: classification, seeding, fail-closed -------------
+    # Fake OMARCHY_PATH tree with fixture migrations + manifest + adapters,
+    # driven via the OMARCHY_PATH / OMARCHY_MIGRATION_STATE env overrides.
+    machine.succeed("mkdir -p /tmp/omig/migrations /tmp/omig/migrations-nix")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/a-ran' > /tmp/omig/migrations/1000000001.sh")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/b-ran' > /tmp/omig/migrations/1000000002.sh")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/d-VENDORED-ran' > /tmp/omig/migrations/1000000004.sh")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/d-adapter-ran' > /tmp/omig/migrations-nix/1000000004.sh")
+    machine.succeed(
+        "jq -n '{\"1000000001.sh\":\"user-safe\",\"1000000002.sh\":\"skip\",\"1000000004.sh\":\"adapter\"}'"
+        " > /tmp/omig/migrations-nix.json"
+    )
+    mig = "OMARCHY_PATH=/tmp/omig OMARCHY_MIGRATION_STATE=/tmp/omig-state omarchy-migrate"
+
+    # fresh user: --pending is read-only and reports nothing (unseeded == baseline)
+    machine.fail(mig + " --pending")
+    # first run baselines everything without executing any script
+    out = machine.succeed(mig)
+    assert "baselining" in out, out
+    machine.fail("test -e /tmp/omig/a-ran")
+    machine.fail("test -e /tmp/omig/d-adapter-ran")
+    machine.succeed("test -f /tmp/omig-state/1000000001.sh")
+    machine.succeed("test -f /tmp/omig-state/1000000002.sh")
+    machine.succeed("test -f /tmp/omig-state/1000000004.sh")
+    machine.fail(mig + " --pending")
+
+    # a "bump" adds new migrations in every class plus an unclassified one
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/e-ran' > /tmp/omig/migrations/1000000005.sh")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/f-ran' > /tmp/omig/migrations/1000000006.sh")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'exit 1' > /tmp/omig/migrations/1000000007.sh")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/h-VENDORED-ran' > /tmp/omig/migrations/1000000008.sh")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/h-adapter-ran' > /tmp/omig/migrations-nix/1000000008.sh")
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/i-ran' > /tmp/omig/migrations/1000000009.sh")
+    machine.succeed(
+        "jq '. + {\"1000000005.sh\":\"user-safe\",\"1000000006.sh\":\"skip\","
+        "\"1000000007.sh\":\"user-safe\",\"1000000008.sh\":\"adapter\"}'"
+        " /tmp/omig/migrations-nix.json > /tmp/omig/m.json && mv /tmp/omig/m.json /tmp/omig/migrations-nix.json"
+    )
+    out = machine.succeed(mig + " --pending")
+    for n in ("1000000005", "1000000006", "1000000007", "1000000008", "1000000009"):
+        assert n in out, out
+
+    # dry-run reports but mutates nothing; it still exits 1 on structural
+    # problems (the unclassified 1000000009) — fail-closed also in dry-run
+    _rc, out = machine.execute("OMARCHY_NIX_UPDATE_DRY_RUN=1 " + mig + " 2>&1")
+    assert _rc == 1, out
+    assert "DRY-RUN" in out, out
+    assert "not classified" in out, out
+    machine.fail("test -e /tmp/omig/e-ran")
+    machine.fail("test -f /tmp/omig-state/1000000005.sh")
+
+    # real run: the failing user-safe + the unclassified one fail the run,
+    # but the rest of the queue is still attempted
+    machine.fail(mig)
+    machine.succeed("test -e /tmp/omig/e-ran")                    # user-safe ran
+    machine.succeed("test -f /tmp/omig-state/1000000005.sh")      #   ... and marked
+    machine.fail("test -e /tmp/omig/f-ran")                       # skip did not run
+    machine.succeed("test -f /tmp/omig-state/1000000006.sh")      #   ... but marked
+    machine.fail("test -f /tmp/omig-state/1000000007.sh")         # failed: NOT marked
+    machine.succeed("test -e /tmp/omig/h-adapter-ran")            # adapter ran
+    machine.fail("test -e /tmp/omig/h-VENDORED-ran")              #   ... vendored did NOT
+    machine.succeed("test -f /tmp/omig-state/1000000008.sh")
+    machine.fail("test -e /tmp/omig/i-ran")                       # unclassified: refused
+    machine.fail("test -f /tmp/omig-state/1000000009.sh")
+
+    # fix both, rerun: the failed migration retries and succeeds
+    machine.succeed("printf '%s\\n' '#!/bin/bash' 'touch /tmp/omig/g-ran' > /tmp/omig/migrations/1000000007.sh")
+    machine.succeed(
+        "jq '. + {\"1000000009.sh\":\"skip\"}' /tmp/omig/migrations-nix.json"
+        " > /tmp/omig/m.json && mv /tmp/omig/m.json /tmp/omig/migrations-nix.json"
+    )
+    machine.succeed(mig)
+    machine.succeed("test -e /tmp/omig/g-ran")
+    machine.succeed("test -f /tmp/omig-state/1000000007.sh")
+    machine.succeed("test -f /tmp/omig-state/1000000009.sh")
+    machine.fail(mig + " --pending")
+
+    # real tree: the packaged manifest classifies every vendored migration
+    machine.succeed("ls /run/current-system/sw/share/omarchy/migrations/*.sh | xargs -n1 basename | sort > /tmp/omig/vendored.txt")
+    machine.succeed("jq -r 'keys[]' /run/current-system/sw/share/omarchy/migrations-nix.json | sort > /tmp/omig/manifest.txt")
+    out = machine.succeed("comm -23 /tmp/omig/vendored.txt /tmp/omig/manifest.txt")
+    assert out.strip() == "", "unclassified vendored migrations: %s" % out
+    out = machine.succeed("comm -13 /tmp/omig/vendored.txt /tmp/omig/manifest.txt")
+    assert out.strip() == "", "stale manifest keys: %s" % out
+
+    # --- (4h) lock-screen PAM -----------------------------------------------
+    # omarchy-lock-password is always present; the fingerprint service is
+    # present here because the test node opts in (omarchy.fingerprint.enable).
+    machine.succeed("test -f /etc/pam.d/omarchy-lock-password")
+    machine.succeed("grep -q pam_faillock /etc/pam.d/omarchy-lock-password")
+    machine.succeed("grep -q pam_unix /etc/pam.d/omarchy-lock-password")
+    machine.succeed("test -f /etc/pam.d/omarchy-lock-fingerprint")
+    machine.succeed("grep -q pam_fprintd /etc/pam.d/omarchy-lock-fingerprint")
+    # fprintd is dbus-activated; the unit exists once the option is on
+    machine.succeed("systemctl cat fprintd.service >/dev/null")
+    assert machine.succeed("systemctl show fprintd.service -p TimeoutStopUSec --value").strip() == "3s"
+    machine.succeed("grep -q systemd.tty.term.console=dumb /proc/cmdline")
+
+    # wrong password rejected, correct password accepted (PAM level — the
+    # Quickshell PamContext consumes these same service files)
+    _rc, out = machine.execute("echo wrong-password | pamtester omarchy-lock-password demo authenticate 2>&1")
+    assert _rc != 0, out
+    _rc, out = machine.execute("echo demo | pamtester omarchy-lock-password demo authenticate 2>&1")
+    assert _rc == 0, out
+
+    # runtime PAM writers are declarative stubs and must not write /etc/pam.d
+    out = machine.succeed("omarchy-apply-lock")
+    assert "declarative" in out, out
+    out = machine.succeed("omarchy-setup-security-fingerprint")
+    assert "omarchy.fingerprint.enable" in out, out
+    out = machine.succeed("omarchy-remove-security-fingerprint")
+    assert "declarative" in out, out
+
+    # --- (4i) runtime mutator quarantine -----------------------------------
+    # Arch system mutators are neutralized: declarative-note stubs print a
+    # NixOS note and exit 0 without touching system state.
+    for script in [
+        "omarchy-dns",
+        "omarchy-menu-timezone",
+        "omarchy-hibernation-setup",
+        "omarchy-install-service-sunshine",
+        "omarchy-install-browser",
+        "omarchy-refresh-limine",
+        "omarchy-reinstall-configs",
+        "omarchy-refresh-sddm",
+    ]:
+        out = machine.succeed(script)
+        assert "NixOS:" in out, "%s did not print its stub note: %r" % (script, out)
+
+    sudo_note = machine.succeed("omarchy-sudo-passwordless")
+    for policy in ["security.sudo.wheelNeedsPassword", "security.sudo.extraRules", "rebuild"]:
+        assert policy in sudo_note, "Missing sudo policy guidance: %r" % sudo_note
+
+    # nixos-adapted no-ops: browser policy writes are gone (silent, so
+    # omarchy-theme-set output stays clean) and firmware update no longer
+    # stages anything on the ESP.
+    out = machine.succeed("omarchy-theme-set-browser")
+    assert out.strip() == "", "theme-set-browser should be a silent no-op: %r" % out
+    machine.succeed("test -x $(command -v omarchy-update-firmware) && ! grep -qF '/boot/EFI' $(command -v omarchy-update-firmware)")
+    machine.succeed("test -x $(command -v omarchy-install-dev-env) && ! grep -qF '/etc/php' $(command -v omarchy-install-dev-env)")
+
+    # user-safe with audited leftovers: timesyncd restart is transient and
+    # works on NixOS (menu update.time stays live).
+    machine.succeed("omarchy-update-time")
+
+    # Arch-only mutators are hidden from the menu entirely.
+    menu = machine.succeed(
+        "cat /run/current-system/sw/share/omarchy/default/omarchy/omarchy-menu.jsonc"
+    )
+    for hid in [
+        "setup.direct-boot",
+        "setup.security.fido2",
+        "setup.security.passwordless-sudo",
+        "remove.security.fido2",
+        "trigger.hardware.hybrid-gpu",
+        "update.config.plymouth",
+        "style.unlock",
+        "update.timezone",
+        "install.browser.zen",
+        "install.browser.brave-origin",
+        "remove.browser.zen",
+        "remove.browser.brave-origin",
+    ]:
+        assert '"%s"' % hid not in menu, "menu still exposes %s" % hid
+
+    # Xbox controllers route into the catalog feature: the menu action is
+    # rewired to omarchy-nix-add and pkg-present resolves the Arch package
+    # name through the features entry in the JSON fixture (xpadneo feature
+    # -> hardware.xpadneo.enable, asserted at eval time above).
+    machine.succeed(
+        "grep -qF 'omarchy-nix-add install.gaming.xbox-controllers' "
+        "/run/current-system/sw/share/omarchy/default/omarchy/omarchy-menu.jsonc"
+    )
+    machine.succeed("omarchy-pkg-present xpadneo-dkms")
+
+    # omarchy-version reports the package version from the store path, not
+    # the Arch package database (as_demo shells carry OMARCHY_PATH via PAM).
+    out = machine.succeed(as_demo("omarchy-version")).strip()
+    assert out not in ("dev", "") and "unknown" not in out, out
+
+    # nixos-adapted sshd flows keep the user-state part (authorized_keys)
+    # while the daemon/firewall stay declarative. gum confirm reads piped
+    # stdin, so printf 'y' drives the removal prompt.
+    machine.succeed(as_demo("mkdir -p ~/.ssh && ssh-keygen -q -t ed25519 -N \"\" -f ~/.ssh/id_ed25519_test"))
+    pubkey = machine.succeed("cat /home/demo/.ssh/id_ed25519_test.pub").strip()
+    machine.succeed(as_demo("omarchy-setup-security-sshd --key=\"%s\"" % pubkey))
+    machine.succeed("grep -qF 'ssh-ed25519' /home/demo/.ssh/authorized_keys")
+    machine.succeed(as_demo("printf \"y\\n\" | omarchy-remove-security-sshd"))
+    _rc, _out = machine.execute("test -f /home/demo/.ssh/authorized_keys")
+    assert _rc != 0, "authorized_keys still present after remove"
+
+    # --- (2) Super+Enter opens a foot terminal. ----------------------------
+    # Count foot windows via hyprctl before/after the keypress, so we assert a
+    # *new* window appeared (not just that one exists). class==foot proves the
+    # full chain landed on foot (the only entry in hyprland-xdg-terminals.list).
+    def foot_classes():
+        clients = json.loads(machine.succeed(as_demo("hyprctl clients -j")))
+        return [c.get("class") for c in clients]
+
+    before = foot_classes()
+    assert "foot" not in before, "foot already open before keypress: %r" % before
+
+    # meta_l = left Super, ret = Enter (QEMU QKeyCode names). This injects a
+    # real kernel keypress chord; the NixOS test driver owns the QMP monitor so
+    # sendkey reaches the guest, unlike the incusd-held monitor on real-VM tests.
+    machine.send_key("meta_l-ret")
+
+    def foot_open(_last_try):
+        return "foot" in foot_classes()
+
+    with machine.nested("waiting for Super+Enter to open foot"):
+        retry(foot_open, timeout_seconds=30)
+
+    # The retry above only proves that some foot window exists. The
+    # keypress must have added exactly one client, and that client is
+    # foot: one bind firing, resolved to foot rather than to another
+    # terminal (or to foot plus a fallback).
+    new_clients = sorted(
+        (collections.Counter(foot_classes()) - collections.Counter(before)).elements()
+    )
+    assert new_clients == ["foot"], \
+        "Super+Enter must open exactly one foot window; new clients: %r" % new_clients
+
+    # --- (6) Systemd user units. -------------------------------------------
+    # The omarchy-* units are tied to graphical-session.target (uwsm activates
+    # it). omarchy-sleep-lock must be active; omarchy-fcitx5 must at least be
+    # loaded (it may fail to fully run without real input hardware, but the unit
+    # ships and starts with the session).
+    machine.wait_until_succeeds(
+        as_demo("systemctl --user is-active --quiet omarchy-sleep-lock.service"),
+        timeout=60,
+    )
+    # The monitor execs omarchy-system-sleep-lock, which talks to the shell
+    # via bare omarchy-shell/qs/jq. A sparse unit PATH lets suspend proceed
+    # unlocked. Eval-time checks.omarchy-sleep-lock-path covers the option;
+    # this asserts the live generated unit.
+    sleep_env = machine.succeed(
+        as_demo("systemctl --user show -p Environment --value omarchy-sleep-lock.service")
+    ).strip()
+    sleep_path = ""
+    for item in sleep_env.split(" "):
+        if item.startswith("PATH="):
+            sleep_path = item[len("PATH="):]
+    assert sleep_path, (
+        "omarchy-sleep-lock.service has no PATH in Environment: %r" % sleep_env
+    )
+    for cmd in ("omarchy-shell", "qs", "jq"):
+        status, _ = machine.execute("PATH=%s command -v %s" % (sleep_path, cmd))
+        assert status == 0, (
+            "omarchy-sleep-lock PATH missing %s: %s" % (cmd, sleep_path)
+        )
+    fcitx_load = machine.succeed(
+        as_demo("systemctl --user show -p LoadState --value omarchy-fcitx5.service")
+    ).strip()
+    assert fcitx_load == "loaded", \
+        "omarchy-fcitx5 LoadState is %r, expected loaded" % fcitx_load
+
+    # wayland.conf stub (port-side seed): allowOverrideXKB must be False so
+    # fcitx5's selfDiagnose does not notify "Sending keyboard layout
+    # configuration ... not yet supported on current desktop" 10s into every
+    # session — the override only works on KDE/GNOME, never on Hyprland.
+    machine.succeed(
+        "grep -q '^Allow Overriding System XKB Settings=False' "
+        "/home/demo/.config/fcitx5/conf/wayland.conf"
+    )
+
+    # --- (6b) Upstream base-list parity (gaps closed 2026-07-28): screen
+    # recording (bar indicator + omarchy-capture-screenrecording), print
+    # applet (nixpkgs names the binary system-config-printer-applet; the
+    # vendored Hidden=true stub masks its autostart exactly like upstream).
+    machine.succeed("command -v gpu-screen-recorder")
+    machine.succeed("command -v system-config-printer-applet")
+    # The KMS backend needs the setcap wrapper, not just the package on PATH
+    # ("pkexec must be setuid root" otherwise — verified on real hardware).
+    gsr_cap = machine.succeed("getcap /run/wrappers/bin/gsr-kms-server").strip()
+    assert "cap_sys_admin" in gsr_cap, \
+        "gsr-kms-server wrapper missing cap_sys_admin: %r" % gsr_cap
+    # UPower: the shell's battery service + power panel read UPower over
+    # DBus; without the daemon every battery read silently says "not
+    # present" (the VM has no battery, but the daemon must run).
+    machine.wait_until_succeeds("systemctl is-active --quiet upower", timeout=30)
+    # Kvantum is gone: upstream dropped kvantum/kvantum-qt5 from
+    # omarchy-base.packages (migrations/1785351479.sh pacman-removes them on
+    # Arch; envs.lua no longer sets QT_STYLE_OVERRIDE), so the port must not
+    # ship the QStyle plugin in the system profile either.
+    kvantum = machine.succeed(
+        # -L: buildEnv symlinks single-provider leaf dirs (plugins/styles
+        # here), and find without -L will not descend into them.
+        "find -L /run/current-system/sw/lib -name 'libkvantum.so' -print -quit"
+    ).strip()
+    assert "libkvantum" not in kvantum, \
+        "kvantum QStyle plugin still in the system profile: %r" % kvantum
+
+    # The running compositor must report zero config errors. Hyprland
+    # >= 2b1723adda forwards descriptor details (min/max ranges) to Lua-set
+    # values, so an out-of-range vendored value now fails loudly instead of
+    # passing silently (real case: group.groupbar.indicator_height = 0,
+    # descriptor min 1 — shipped by upstream, only valid on older Hyprland).
+    # Assert the class here, on the live session, so the next range-tightening
+    # commit cannot slip through green VM runs again.
+    cfgerr = machine.succeed(as_demo("hyprctl configerrors")).strip()
+    assert cfgerr == "", "Hyprland config errors on the running session: %r" % cfgerr
+
+    # --- (7) First-run evidence. -------------------------------------------
+    # autostart.lua runs omarchy-provision-first-run on hyprland.start; it calls
+    # omarchy-provision-user (which writes ~/.XCompose via install/user/all.sh ->
+    # xcompose.sh) then logs each step and marks done/first-run-user on success.
+    # The marker was already awaited in section (3) (the browser assertion
+    # serializes behind it); the wait here is kept so the section stands alone.
+    machine.wait_until_succeeds(
+        "test -f /home/demo/.local/state/omarchy/done/first-run-user",
+        timeout=180,
+    )
+    machine.succeed("test -f /home/demo/.local/state/omarchy/first-run.log")
+    machine.succeed("grep -q 'Completed: set GNOME theme' /home/demo/.local/state/omarchy/first-run.log")
+    machine.succeed("grep -q 'Completed: show welcome notification' /home/demo/.local/state/omarchy/first-run.log")
+    machine.succeed("test -f /home/demo/.XCompose")
+
+    # --- (7b) NixOS agent skill + update-safe managed links. ---------------
+    # Upstream finalize-user links each agent to $OMARCHY_PATH once. Because
+    # that is a generation-specific store path on NixOS, Home Manager must
+    # adopt and refresh the links on every activation. Simulate an old
+    # generation by redirecting all six links to a stale directory, delete
+    # that directory (as GC would), rerun the HM activation unit, and require
+    # the links to point at the active package target again.
+    with machine.nested("NixOS agent skill links survive package updates"):
+        skill_paths = [
+            ".agents/skills/omarchy",
+            ".claude/skills/omarchy",
+            ".codex/skills/omarchy",
+            ".pi/agent/skills/omarchy",
+            ".gemini/config/skills/omarchy",
+            ".hermes/skills/omarchy",
+        ]
+        expected = machine.succeed(
+            as_demo("readlink -f \"$OMARCHY_PATH/default/agents/skills/omarchy\"")
+        ).strip()
+        assert expected.startswith("/nix/store/"), expected
+
+        for skill_path in skill_paths:
+            resolved = machine.succeed(
+                as_demo("readlink -f ~/" + skill_path)
+            ).strip()
+            assert resolved == expected, \
+                "%s resolves to %r, expected %r" % (skill_path, resolved, expected)
+            machine.succeed(
+                as_demo("grep -Fq \"Omarchy on NixOS\" ~/" + skill_path + "/SKILL.md")
+            )
+
+        machine.succeed("mkdir -p /tmp/stale-omarchy-skill")
+        for skill_path in skill_paths:
+            machine.succeed(
+                "ln -sfn /tmp/stale-omarchy-skill /home/demo/" + skill_path
+            )
+
+        # Simulate garbage collection of the old generation: the stale target
+        # disappears, leaving all six links dangling (test -e follows symlinks).
+        machine.succeed("rm -rf /tmp/stale-omarchy-skill")
+        for skill_path in skill_paths:
+            machine.succeed("test ! -e /home/demo/" + skill_path)
+
+        machine.succeed("systemctl restart home-manager-demo.service")
+        for skill_path in skill_paths:
+            machine.succeed("test -e /home/demo/" + skill_path)
+            resolved = machine.succeed(
+                as_demo("readlink -f ~/" + skill_path)
+            ).strip()
+            assert resolved == expected, \
+                "HM did not refresh %s: %r != %r" % (skill_path, resolved, expected)
+
+    # --- (9) Theme switch x2: regression guard for the read-only store bug. -
+    # cp from the read-only Nix store inherits 444/555 modes, leaving theme
+    # files unwritable and colors.toml stale across switches (the bug the
+    # --no-preserve=mode patches in pkgs/omarchy.nix fix). Headless mode
+    # skips session-integration flakiness (shell IPC, restart commands) and
+    # exercises only the file copy/mv/template path the regression affects.
+    # Declaration limit: OMARCHY_THEME_HEADLESS=1 does not verify live-session
+    # colors (bar/quickshell IPC, wallpaper apply, running client themes) —
+    # only on-disk theme.name / colors.toml / writability after the switch.
+    with machine.nested("theme switch x2: read-only store regression"):
+        headless = "OMARCHY_THEME_HEADLESS=1 OMARCHY_THEME_SKIP_BACKGROUND=1"
+
+        machine.succeed(as_demo(headless + " omarchy-theme-set tokyo-night"))
+        name = machine.succeed(
+            as_demo("cat ~/.local/state/omarchy/current/theme.name")
+        ).strip()
+        assert name == "tokyo-night", \
+            "theme.name is %r, expected tokyo-night" % name
+
+        tokyo_colors = machine.succeed(
+            as_demo("cat ~/.local/state/omarchy/current/theme/colors.toml")
+        )
+
+        machine.succeed(as_demo(headless + " omarchy-theme-set nord"))
+        name = machine.succeed(
+            as_demo("cat ~/.local/state/omarchy/current/theme.name")
+        ).strip()
+        assert name == "nord", "theme.name is %r, expected nord" % name
+
+        nord_colors = machine.succeed(
+            as_demo("cat ~/.local/state/omarchy/current/theme/colors.toml")
+        )
+        assert nord_colors != tokyo_colors, \
+            "colors.toml unchanged after theme switch (stale - read-only store bug)"
+
+        nonwritable = machine.succeed(as_demo(
+            "find ~/.local/state/omarchy/current/theme/ ! -writable -print 2>/dev/null"
+        )).strip()
+        assert not nonwritable, \
+            "non-writable files in theme dir:\n" + nonwritable
+
+        machine.succeed(
+            as_demo("test ! -d ~/.local/state/omarchy/current/next-theme")
+        )
+
+    # --- (9b) Plugin clone: static patch guard. ---------------------------
+    # omarchy-plugin-clone copies plugin sources out of the store with cp -aL;
+    # without --no-preserve=mode the clone lands as 444 files in 555
+    # directories (verified by re-running the clone with the flags stripped),
+    # so the user cannot edit the clone — the whole point of the command —
+    # and the clone cannot be cleaned up normally (rm inside the 555 dirs
+    # fails; the remove script's mv-to-backup works, the backup stays
+    # read-only). Static guard on the packaged script: every cp -aL site must
+    # carry the patch (the count tripwire forces re-audit when upstream adds
+    # a site).
+    with machine.nested("plugin-clone --no-preserve=mode guard"):
+        clone_script = machine.succeed(
+            "cat /run/current-system/sw/share/omarchy/bin/omarchy-plugin-clone"
+        )
+        assert clone_script.count("cp -aL") == 4, \
+            "omarchy-plugin-clone cp -aL site count changed — re-audit the guard"
+        assert clone_script.count("cp -aL --no-preserve=mode") == 4, \
+            "omarchy-plugin-clone lost --no-preserve=mode on a cp -aL site"
+
+    # --- (10) User config is editable + refresh is idempotent. --------------
+    # hyprland.lua and .luarc.json must be regular files (not store symlinks)
+    # and writable so the Setup menu and omarchy-refresh-config can overwrite
+    # them. omarchy-refresh-config / omarchy-refresh-hyprland must be safe to
+    # call repeatedly (idempotent copy from the default tree).
+    with machine.nested("user config editability + refresh idempotency"):
+        for f in ["hyprland.lua", ".luarc.json"]:
+            path = "~/.config/hypr/" + f
+            machine.succeed(as_demo("test -f " + path))
+            machine.succeed(as_demo("test ! -L " + path))
+            machine.succeed(as_demo("test -w " + path))
+
+        # bindings.lua (not hyprland.lua) to avoid clobbering the running
+        # session's entry point; Hyprland does not hot-reload Lua anyway.
+        machine.succeed(as_demo("omarchy-refresh-config hypr/bindings.lua"))
+        machine.succeed(as_demo("omarchy-refresh-config hypr/bindings.lua"))
+        machine.succeed(as_demo("test -w ~/.config/hypr/bindings.lua"))
+
+        machine.succeed(as_demo("omarchy-refresh-hyprland"))
+        machine.succeed(as_demo("omarchy-refresh-hyprland"))
+        machine.succeed(
+            as_demo("test -w ~/.local/state/omarchy/toggles/hypr/flags.lua")
+        )
+
+    # --- (10b) skel parity seeds + omarchy fonts. ---------------------------
+    # Branding files (about/screensaver ASCII art) must exist as writable
+    # regular files — omarchy-screensaver loops "File not found" without
+    # screensaver.txt. The omarchy icon font and the upstream fontconfig
+    # aliases (50-omarchy.conf) must be visible to fontconfig.
+    with machine.nested("skel parity seeds + fonts"):
+        for path in [
+            "~/.config/omarchy/branding/about.txt",
+            "~/.config/omarchy/branding/screensaver.txt",
+            "~/.local/share/nautilus-python/extensions/localsend.py",
+            "~/.local/share/nautilus-python/extensions/transcode.py",
+            "~/.local/state/tensaku/state.toml",
+            "~/.config/fastfetch/config.jsonc",
+            "~/.bashrc",
+        ]:
+            machine.succeed(as_demo("test -f " + path))
+            machine.succeed(as_demo("test ! -L " + path))
+            machine.succeed(as_demo("test -w " + path))
+
+        # The ~/.bashrc seed is upstream's default/bashrc: an interactive
+        # bash walks default/bash/rc (the ff alias) into init, which sources
+        # fzf's key bindings from the system profile (Ctrl-T/Ctrl-R).
+        bash_out = machine.succeed(as_demo(
+            "bash -ic \"type -t __fzf_history__; alias ff; bind -X\" "
+            "</dev/null 2>/dev/null"
+        ))
+        for needle in ["function", "alias ff=", "fzf-file-widget", "__fzf_history__"]:
+            assert needle in bash_out, \
+                "interactive bash lacks %r from the omarchy rc chain: %r" % (needle, bash_out)
+        machine.succeed("fc-list | grep -qi omarchy")
+        machine.succeed("test -e /etc/fonts/conf.d/50-omarchy.conf")
+        mono = machine.succeed("fc-match monospace").strip()
+        assert "JetBrainsMono" in mono, "fc-match monospace -> %r" % mono
+
+        # B16 regression guard: nixpkgs wraps ttfx (v4.0.0 Rust TTE port;
+        # comm = .ttfx-wrapped), so the screensaver must tolerate the
+        # wrapped name in pgrep/pkill -x, else its respawn loop OOMs the
+        # session. The pattern must stay <=15 chars — a longer one makes
+        # pgrep warn "pattern ... longer than 15 characters" on every call,
+        # and this pgrep fires once per second in the wait loop, so the
+        # warnings pile up behind the ttfx canvas and flash at every effect
+        # change (found on real AMD hardware).
+        script = machine.succeed(
+            "cat /run/current-system/sw/share/omarchy/bin/omarchy-screensaver"
+        )
+        assert '-x "\\.?ttfx.*"' in script, \
+            "screensaver lost the wrapped-ttfx pgrep/pkill tolerance (B16)"
+
+        # The exact pattern must not trip pgrep's >15-char warning (the
+        # source of the console text flashing at effect changes).
+        _st, out = machine.execute("pgrep -x '\\.?ttfx.*' 2>&1")
+        assert "longer than" not in out, \
+            "pgrep pattern triggers the >15-char warning: %r" % out
+
+        # B18: status and stop share upstream's executable-identity helper.
+        # A real ELF executable under a store path must be recognized, while
+        # a recorder-prefixed helper with the same truncated Linux process
+        # name and a recorder-shaped command line must never count or receive
+        # a stop signal. No fake /proc tree or pgrep is involved.
+        recorder_fixture = "${recorderFixture}/bin/"
+        recorder_runtime = "/run/user/1000/b18-recorders"
+        machine.succeed(as_demo("mkdir -p " + recorder_runtime + "/recordings"))
+
+        def recorder_command(args):
+            return as_demo(
+                "XDG_RUNTIME_DIR=" + recorder_runtime + " "
+                "OMARCHY_SCREENRECORD_DIR=" + recorder_runtime + "/recordings "
+                "omarchy-capture-screenrecording " + args
+            )
+
+        def start_recorder_fixture(unit, executable, extra=""):
+            machine.succeed(
+                "systemd-run --quiet --unit=" + unit + " --property=User=demo " +
+                recorder_fixture + executable + " " + recorder_runtime + "/" + unit +
+                ".signal " + extra
+            )
+            machine.wait_for_file(recorder_runtime + "/" + unit + ".signal.ready", timeout=10)
+            return machine.succeed(
+                "systemctl show " + unit + " --property=MainPID --value"
+            ).strip()
+
+        decoy_pid = start_recorder_fixture(
+            "b18-decoy", "gpu-screen-recorder-helper",
+            '"/nix/store/fake-recorder/bin/gpu-screen-recorder -w eDP-1"',
+        )
+        # Prove this is a live pgrep candidate before rejecting it; otherwise
+        # the negative result could pass without exercising the exe check.
+        candidates = machine.succeed(as_demo("pgrep -x gpu-screen-reco")).splitlines()
+        assert decoy_pid in candidates, "recorder decoy never became a process-name candidate"
+        machine.fail(as_demo("omarchy-capture-screenrecording-process --pid " + decoy_pid))
+        machine.fail(as_demo(
+            "omarchy-capture-screenrecording-process --pid " + decoy_pid + " --signal INT"
+        ))
+        machine.fail(recorder_command("--status"))
+        machine.succeed("systemctl is-active --quiet b18-decoy")
+        machine.succeed("test ! -e " + recorder_runtime + "/b18-decoy.signal")
+
+        # Two indicator probes run together at cold boot. Both must remain
+        # idle even while a command-line decoy and the sibling query exist.
+        statuses = machine.succeed(recorder_command(
+            "--status & first=$!; " +
+            "XDG_RUNTIME_DIR=" + recorder_runtime + " omarchy-capture-screenrecording --status & second=$!; " +
+            'wait "$first"; first_status=$?; wait "$second"; second_status=$?; ' +
+            'printf "%s %s\\n" "$first_status" "$second_status"'
+        )).strip()
+        assert statuses == "1 1", "concurrent recorder status queries matched decoys: " + statuses
+
+        gpu_pid = start_recorder_fixture("b18-gpu", "gpu-screen-recorder")
+        wf_pid = start_recorder_fixture("b18-wf", "wf-recorder")
+        for pid in [gpu_pid, wf_pid]:
+            machine.succeed(as_demo("omarchy-capture-screenrecording-process --pid " + pid))
+        machine.succeed(recorder_command("--status"))
+
+        # Status needs no recordings directory; it answers the same process
+        # selection used by stop without starting a capture or signalling it.
+        machine.succeed(as_demo(
+            "XDG_RUNTIME_DIR=" + recorder_runtime + " "
+            "OMARCHY_SCREENRECORD_DIR=" + recorder_runtime + "/absent "
+            "omarchy-capture-screenrecording --status"
+        ))
+        video = recorder_runtime + "/recordings/fixture.mp4"
+        machine.succeed(as_demo(
+            "ffmpeg -y -f lavfi -i color=c=black:s=64x64:r=10 -t 0.5 "
+            "-c:v libx264 -pix_fmt yuv420p " + video + " -loglevel error"
+        ))
+        machine.succeed(as_demo(
+            "printf \"%s\\n\" " + gpu_pid + " >" + recorder_runtime + "/omarchy-screenrecord-pid; "
+            "printf \"%s\\n\" " + video + " >" + recorder_runtime + "/omarchy-screenrecord-filename"
+        ))
+        machine.succeed(recorder_command("--stop-recording"))
+        machine.wait_for_file(recorder_runtime + "/b18-gpu.signal", timeout=10)
+        machine.succeed("grep -qx INT " + recorder_runtime + "/b18-gpu.signal")
+        machine.succeed("systemctl is-active --quiet b18-wf")
+        machine.succeed("systemctl is-active --quiet b18-decoy")
+        machine.succeed("test ! -e " + recorder_runtime + "/omarchy-screenrecord-pid")
+        machine.succeed("test ! -e " + recorder_runtime + "/omarchy-screenrecord-filename")
+        machine.succeed(as_demo("ffprobe -v error " + video))
+
+        # A saved PID belonging to a decoy is stale. Status and stop must
+        # reject it without falling back to the other recorder still running.
+        machine.succeed(as_demo(
+            "printf \"%s\\n\" " + decoy_pid + " >" + recorder_runtime + "/omarchy-screenrecord-pid"
+        ))
+        machine.fail(recorder_command("--status"))
+        machine.fail(recorder_command("--stop-recording"))
+        machine.succeed("systemctl is-active --quiet b18-wf")
+        machine.succeed("systemctl is-active --quiet b18-decoy")
+        machine.succeed("test ! -e " + recorder_runtime + "/b18-wf.signal")
+        machine.succeed("test ! -e " + recorder_runtime + "/b18-decoy.signal")
+
+        # With no saved PID, a legacy recording is found and stopped by
+        # executable identity; its recorder-prefixed helper is left alive.
+        machine.succeed(as_demo("rm " + recorder_runtime + "/omarchy-screenrecord-pid"))
+        machine.succeed(as_demo(
+            "printf \"%s\\n\" " + video + " >" + recorder_runtime + "/omarchy-screenrecord-filename"
+        ))
+        machine.succeed(recorder_command("--stop-recording"))
+        machine.wait_for_file(recorder_runtime + "/b18-wf.signal", timeout=10)
+        machine.succeed("grep -qx INT " + recorder_runtime + "/b18-wf.signal")
+        machine.succeed("systemctl is-active --quiet b18-decoy")
+        machine.fail(recorder_command("--status"))
+        machine.succeed("systemctl stop b18-decoy")
+
+        # The bar and menu use the same status operation that these behavioral
+        # checks exercised, keeping their stop affordances in step.
+        rec_qml = machine.succeed(
+            "cat /run/current-system/sw/share/omarchy/shell/plugins/bar/indicators/ScreenRecording.qml"
+        )
+        assert '["omarchy-capture-screenrecording", "--status"]' in rec_qml, \
+            "bar ScreenRecording indicator no longer asks the capture script for status"
+        menu_jsonc = machine.succeed(
+            "cat /run/current-system/sw/share/omarchy/default/omarchy/omarchy-menu.jsonc"
+        )
+        recorder_menu = json.loads(jsonc_to_json(menu_jsonc))
+        assert recorder_menu["trigger.capture.screenrecord.stop"]["when"] == \
+            "omarchy-capture-screenrecording --status", "menu stop guard no longer shares capture status"
+
+    # --- (11) Binary coverage: menu actions, systemd ExecStarts, autostart. -
+    # Every command a user can trigger from the Omarchy menu, plus every binary
+    # the session autostart and systemd user units reference, must resolve on
+    # PATH. This is the "apps don't launch" guard: a missing binary means a
+    # menu action or autostart step silently fails.
+    with machine.nested("binary coverage from menu + units + autostart"):
+        # Blind-spot guard: the quickshell launcher (AppLibrary.qml) starts
+        # every picked app via `gtk-launch <desktop-id>` — that call lives in
+        # QML, not in menu.jsonc, so the extraction below never sees it.
+        machine.succeed("command -v gtk-launch")
+
+        # Same class of blind spot: omarchy-capture-screenshot (the PRINT
+        # binding) and omarchy-clipboard-open exec omasnap (349ecc0 replaced
+        # the tensaku-edit editor path); the reference lives in bash
+        # scripts, not in menu.jsonc.
+        machine.succeed("command -v omasnap")
+
+        # Same class: the network panel's Wi-Fi band toggle (quattro 14f1bb6c)
+        # execs omarchy-network-band from QML (shell/plugins/panels/network/
+        # Panel.qml), and the script shells out to `iw dev <device> link` —
+        # neither call is visible to the menu/autostart/units extraction.
+        machine.succeed("command -v omarchy-network-band")
+        machine.succeed("command -v iw")
+
+        # Same class: media keys / omarchy-audio-* scripts shell out to pactl
+        # (get-default-sink, set-sink-volume, …). pipewire provides the Pulse
+        # protocol, not the CLI — pactl must come from runtimeDeps.
+        machine.succeed("command -v pactl")
+
+        # Tripwire over vendored shell/ QML exec-ish call sites (Quickshell
+        # Process { … } plus Quickshell/Util.execDetached). The five probes
+        # above are manual; this list forces a re-audit when upstream adds,
+        # drops or changes a site: tests/qml-exec-sites.py prints one
+        # "file: command" line per site and the result must equal
+        # tests/fixtures/qml-exec-sites.txt, so a bump fails with a diff of
+        # exactly the sites that changed. Review them (and probe any new
+        # binary above), then regenerate the fixture with the command in
+        # the script header (also in docs/UPSTREAM.md, bump checklist).
+        # Audit history from the count-only era (site counts):
+        # v4.0.0: 114 → 121 — new panels (agents, speedtest, disk-speedtest,
+        # wifiqr) + SpeedTestOverlay; audited execs: omarchy-network-status,
+        # omarchy-disk-speedtest, coreutils find, agents-panel usage
+        # scanning via the omarchy-agent-usage-* bin scripts (PATH-resident).
+        # v4.0.1: 121 → 122 — Util.execDetached gained the argv form
+        # (notification click actions run as argv, never shell strings:
+        # ["bash","-lc",'exec "$@"',...].concat(argv)) and the network panel
+        # gained the captive-portal sign-in action
+        # (["omarchy-launch-browser", Model.captivePortalUrl] — url validated
+        # upstream; launcher resolves the NixOS .desktop glob).
+        # v4.0.3: 122 → 124 — lock/Service.qml gained a fingerprint
+        # pre-check (bash -c guards on /etc/pam.d/omarchy-lock-fingerprint +
+        # command -v fprintd-list, echoes no and skips the whole path when
+        # either is absent — fingerprint stays out of scope here) and
+        # battery/Service.qml gained powerprofilesctl get (argv form; the
+        # module enables power-profiles-daemon, so the CLI is on PATH).
+        # 349ecc0: 124 → 134 — Elsewhen moved into the shell (panel + globe:
+        # bash/date timezone probes, timedatectl list-timezones, curl
+        # geocode/weather), BrightnessKeys service (brightnessctl +
+        # omarchy-hw-display), image-picker theme rows
+        # (omarchy-theme-switcher --print-rows) and the lock video poster
+        # (bash poster.sh → ffmpegthumbnailer).
+        # 8b4eae6: 134 → 135 — Commons/Style.qml gained animationsProc
+        # (hyprctl -j getoption animations:enabled, argv form) so the shell
+        # follows the new no-animations toggle; hyprctl is already probed.
+        # The list is read from the flake's omarchy package on the driver
+        # side; first prove the VM runs that same package.
+        omarchy_pkg = "${omarchy.packages.${pkgs.stdenv.hostPlatform.system}.omarchy}"
+        vm_version_bin = machine.succeed(
+            "readlink -f /run/current-system/sw/share/omarchy/bin/omarchy-version"
+        ).strip()
+        assert vm_version_bin == omarchy_pkg + "/share/omarchy/bin/omarchy-version", (
+            "VM runs %r, not the flake package %r" % (vm_version_bin, omarchy_pkg)
+        )
+        qml_sites = subprocess.run(
+            [sys.executable, "${./qml-exec-sites.py}", omarchy_pkg + "/share/omarchy/shell"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        with open("${./fixtures/qml-exec-sites.txt}") as f:
+            qml_sites_expected = f.read().splitlines()
+        assert qml_sites == qml_sites_expected, (
+            "shell/ QML exec-ish sites changed — review them, probe new "
+            "binaries, then regenerate tests/fixtures/qml-exec-sites.txt:\n"
+            + "\n".join(
+                difflib.unified_diff(
+                    qml_sites_expected, qml_sites, "fixture", "package", lineterm=""
+                )
+            )
+        )
+
+        # Shell keywords/builtins/system binaries that are always present and
+        # are not the *coverage point* of their action.
+        SKIP_BUILTINS = {
+            "if", "then", "else", "elif", "fi", "do", "done", "for", "while",
+            "in", "pkill", "systemctl", "test", "echo", "exit", "return", "cd",
+            "export", "local", "source", "set", "sleep", "",
+        }
+
+        def extract_commands(action):
+            """Return candidate command tokens from a shell action string."""
+            cmds = set()
+            action = action.replace("\\", "")
+
+            # $(...) subshell commands
+            for m in re.finditer(r"\$\(\s*([^\s)]+)", action):
+                cmd = m.group(1).strip()
+                if cmd and cmd not in SKIP_BUILTINS:
+                    cmds.add(cmd)
+
+            # Split on ;, &&, ||, | — take the first word of each segment.
+            in_test = False
+            for seg in re.split(r";|&&|\|\||\|", action):
+                seg = seg.strip()
+                if not seg:
+                    continue
+                # Compound [[ ... ]] predicates are not commands. Their
+                # command substitutions were collected above.
+                if in_test or seg.startswith("[["):
+                    in_test = "]]" not in seg
+                    continue
+                # Strip leading VAR=value assignments (may chain).
+                while True:
+                    m = re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg)
+                    if not m:
+                        break
+                    seg = seg[m.end():].strip()
+                    if seg.startswith("$("):
+                        # Skip past the $(...) — command already extracted above.
+                        depth, i = 0, 0
+                        while i < len(seg):
+                            if seg[i] == "(":
+                                depth += 1
+                            elif seg[i] == ")":
+                                depth -= 1
+                                if depth == 0:
+                                    break
+                            i += 1
+                        seg = seg[i + 1:].strip() if i < len(seg) else ""
+                    elif seg.split(None, 1):
+                        parts = seg.split(None, 1)
+                        seg = parts[1].strip() if len(parts) > 1 else ""
+                    else:
+                        seg = ""
+                if not seg:
+                    continue
+                seg = seg.lstrip("'\"")
+                parts = seg.split()
+                if not parts:
+                    continue
+                word = parts[0].strip("'\"")
+                if word and word not in SKIP_BUILTINS and not word.startswith("["):
+                    cmds.add(word)
+            return cmds
+
+        assert extract_commands('[[ -f "Outlook.desktop" && -f "Word.desktop" ]]') == set()
+        assert extract_commands('[[ -f "Outlook.desktop" && -f "Word.desktop" ]] && missing-helper') == {"missing-helper"}
+        assert extract_commands('[[ -f "file" && $(omarchy-hw-x86) == yes ]] || other-helper') == {"omarchy-hw-x86", "other-helper"}
+
+        # (a) Menu actions — parse $OMARCHY_PATH/default/omarchy/omarchy-menu.jsonc
+        # with the string-aware JSONC parser (tests/checks/jsonc.py, shared
+        # with checks.catalog-consistency) and walk the tree. The former line
+        # regex cut 12 of the 264 actions short at a "//" inside a URL or at
+        # an escaped quote; on the 8b4eae6 menu every command word still
+        # preceded the cut, but any command after one (`… 'https://…' &&
+        # omarchy-x`) would have silently left this coverage.
+        menu_json = jsonc_to_json(machine.succeed(
+            as_demo("cat $OMARCHY_PATH/default/omarchy/omarchy-menu.jsonc")
+        ))
+        menu_tree = json.loads(menu_json)
+
+        def menu_fields(node, key, found):
+            # Every string value stored under `key`, at any depth.
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k == key and isinstance(v, str):
+                        found.append(v)
+                    menu_fields(v, key, found)
+            elif isinstance(node, list):
+                for v in node:
+                    menu_fields(v, key, found)
+            return found
+
+        actions = menu_fields(menu_tree, "action", [])
+        # The parse must account for every "action" key in the comment-free
+        # text: json.loads keeps only the last of duplicate entry ids, and the
+        # walk skips non-string values, so a mismatch means actions were lost
+        # between the file and this coverage.
+        action_keys = len(re.findall(r'"action"\s*:', menu_json))
+        assert len(actions) == action_keys, (
+            "menu parse yielded %d actions but the file has %d \"action\" keys "
+            "(duplicate ids or non-string actions?)" % (len(actions), action_keys)
+        )
+        # Min-count guard: if upstream renames the file or changes the menu
+        # schema, extraction silently empties and every PATH check below
+        # passes vacuously. Conservative floor (>=100); live count is in the
+        # failure message so the sticky total stays self-maintaining.
+        assert len(actions) >= 100, (
+            "menu action extraction yielded only %d actions (need >= 100; "
+            "file/schema moved?)" % len(actions)
+        )
+        candidates = set()
+        for action in actions:
+            candidates |= extract_commands(action)
+
+        # Menu `when:` guards also shell out to omarchy-* helpers
+        # (omarchy-toggle-enabled, omarchy-hibernation-available, omarchy-hw-*,
+        # omarchy-cmd-present, omarchy-pkg-present, …). First token of each
+        # when command (after a leading `!`) must resolve on PATH too.
+        whens = menu_fields(menu_tree, "when", [])
+        for when in whens:
+            s = when.strip()
+            while s.startswith("!"):
+                s = s[1:].strip()
+            if not s:
+                continue
+            word = s.split()[0].strip("'\"")
+            if word.startswith("omarchy-"):
+                candidates.add(word)
+
+        # `disabled:` guards run the same shell probes, but were previously
+        # omitted from coverage. Parse them too so optional integrations such
+        # as Flatpak and every package-presence probe remain an explicit review
+        # point when upstream changes the menu.
+        disableds = menu_fields(menu_tree, "disabled", [])
+        assert len(disableds) >= 50, (
+            "menu disabled-guard extraction yielded only %d entries (need >= 50; "
+            "file/schema moved?)" % len(disableds)
+        )
+        for disabled in disableds:
+            # This specific availability probe may fail when the optional
+            # Flatpak integration is absent. Do not allowlist flatpak globally:
+            # a new action that requires it must still fail coverage.
+            if disabled == "flatpak info com.nvidia.geforcenow":
+                continue
+            candidates |= extract_commands(disabled)
+
+        # (b) Autostart.lua — hl.exec_cmd("...") and o.launch("...") strings.
+        auto = machine.succeed(
+            as_demo("cat $OMARCHY_PATH/default/hypr/autostart.lua")
+        )
+        autostart_hits = 0
+        for pat in [r'hl\.exec_cmd\("([^"]*)"', r'o\.launch\("([^"]*)"']:
+            for m in re.finditer(pat, auto):
+                autostart_hits += 1
+                candidates |= extract_commands(m.group(1))
+        # Same vacuity guard for the autostart patterns (currently 8 hits).
+        assert autostart_hits >= 5, \
+            "autostart exec/launch extraction yielded only %d" % autostart_hits
+
+        # (c) Check each candidate resolves on the session PATH.
+        missing = set()
+        for cmd in sorted(candidates):
+            status, _ = machine.execute(as_demo("command -v " + cmd))
+            if status != 0:
+                missing.add(cmd)
+
+        # Allowlist of commands from packages not yet ported or that are
+        # hardware-specific. Each entry documented with WHY.
+        expected_missing = {
+            # Dell XPS haptic touchpad firmware tool — not in nixpkgs; only
+            # shown in the menu on matching Dell hardware (guarded by `when`).
+            "dell-xps-touchpad-haptics",
+        }
+
+        unexpected = missing - expected_missing
+        assert not unexpected, (
+            "commands missing from PATH but not in expected_missing: "
+            + ", ".join(sorted(unexpected))
+        )
+        stale = expected_missing - missing
+        if stale:
+            machine.log(
+                "note: expected_missing entries now resolve (remove them): "
+                + ", ".join(sorted(stale))
+            )
+
+        # (d) Systemd user unit ExecStarts resolve.
+        # The 8 vendored units are path-adapted in pkgs/omarchy.nix (store
+        # paths replace /usr/bin/*). Each ExecStart binary must exist.
+        # Tripwire: pkgs/omarchy.nix installs units via
+        # `install … default/systemd/user/*.service` — a new upstream unit
+        # would ship unadapted and unchecked if we only asserted this list.
+        # Mirror the cp -aL count tripwire: package unit dir must match
+        # unit_names exactly (count + names). (The USB/Thunderbolt
+        # authorization units were fully reverted upstream at 33783b1.)
+        unit_names = [
+            "bt-agent", "omarchy-crash-watch", "omarchy-fcitx5",
+            "omarchy-migrate-notify", "omarchy-recover-internal-monitor",
+            "omarchy-sleep-lock", "omarchy-speaker-tuning",
+            "omarchy-tailscale-receive",
+        ]
+        # Derive the package store root in Python so we never put a shell
+        # parameter-expansion brace form inside this Nix testScript string
+        # (Nix would interpolate it). The session variable is deliberately
+        # the stable profile path, and the merged profile dirs are real
+        # directories — so resolve through a profile bin LEAF symlink, which
+        # points into the store. $out/lib/systemd/user is not linked into
+        # the profile at all: only the store path has the package's own unit
+        # set for this drift check (the merged profile lib would mix in
+        # every other package's units).
+        store_version_bin = machine.succeed(
+            as_demo("readlink -f /run/current-system/sw/share/omarchy/bin/omarchy-version")
+        ).strip()
+        package_root = store_version_bin[: -len("/share/omarchy/bin/omarchy-version")]
+        assert package_root.startswith("/nix/store/"), package_root
+        units_dir = package_root + "/lib/systemd/user"
+        shipped = machine.succeed(
+            "ls -1 " + units_dir + "/*.service | xargs -n1 basename "
+            "| sed 's/\\.service$//' | sort"
+        ).strip().splitlines()
+        expected = sorted(unit_names)
+        missing_units = sorted(set(expected) - set(shipped))
+        unexpected_units = sorted(set(shipped) - set(expected))
+        assert shipped == expected, (
+            "package systemd user unit set drifted (count %d vs %d): "
+            "missing=%s unexpected=%s — update unit_names and "
+            "pkgs/omarchy.nix path adaptation together"
+            % (
+                len(shipped),
+                len(expected),
+                missing_units or "[]",
+                unexpected_units or "[]",
+            )
+        )
+        for unit in unit_names:
+            unit_path = "/etc/systemd/user/" + unit + ".service"
+            line = machine.succeed(
+                "grep -E '^ExecStart=' " + unit_path
+            ).strip()
+            binary = line.split("=", 1)[1].split()[0]
+            machine.succeed("test -x " + binary)
+
+        kill_mode = machine.succeed(as_demo(
+            "systemctl --user show wayland-wm@hyprland.desktop.service -p KillMode --value"
+        )).strip()
+        assert kill_mode == "mixed", "Hyprland teardown must preserve its shell: " + kill_mode
+        assert machine.succeed(as_demo(
+            "systemctl --user show wayland-wm@hyprland.desktop.service -p Type --value"
+        )).strip() == "notify", "Hyprland must retain UWSM's session readiness protocol"
+
+        # (e) omarchy-migrate user unit: native oneshot that closes the
+        # "rebuild without omarchy-update skips migrations" gap. Assert it
+        # is wired into graphical-session.target and actually ran — the
+        # per-user state dir must exist with (baseline) markers.
+        machine.succeed(
+            "test -L /etc/systemd/user/graphical-session.target.wants/omarchy-migrate.service"
+        )
+        machine.wait_until_succeeds(
+            as_demo("test -d ~/.local/state/omarchy/migrations"), timeout=90
+        )
+        marker_count = machine.succeed(
+            as_demo("ls ~/.local/state/omarchy/migrations | wc -l")
+        ).strip()
+        assert int(marker_count) > 0, "omarchy-migrate produced no markers"
+
+    # A login shell can reach IPC even when owed.service lacks socat/qs.
+    # Check the real daemon's handoff, which previously retried forever.
+    with machine.nested("OWE hands still backgrounds to the shell"):
+        machine.wait_until_succeeds(as_demo(
+            "journalctl --user -u owed.service --no-pager -o cat | grep -q \"shell background enabled\""
+        ), timeout=60)
+
+    # --- (10) Behavioral desktop contract. ----------------------------------
+    # Ported concepts from upstream test/acceptance.d: drive the shell over
+    # its IPC and assert observable effects (layer namespaces, windows, lock
+    # lifecycle log events) instead of mere process existence. Key/text
+    # injection uses QMP sendkey (machine.send_key/send_chars) — the kernel
+    # evdev path; Wayland virtual-keyboard clients (wtype) cannot type into
+    # ext-session-lock surfaces (see the header comment).
+
+    # Layer probe for as_demo (the su -c wrapper forbids single quotes, so
+    # the jq program is double-quoted with escaped inner quotes). "Present"
+    # means shown: larger than 1x1. Since 349ecc0 (#13419) the menu, OSD,
+    # clipboard and emoji overlays keep their surface mapped and park it
+    # hidden as a 1x1 bottom layer instead of unmapping it.
+    def layer_probe(ns, present):
+        op = "> 0" if present else "== 0"
+        return as_demo(
+            "hyprctl -j layers | jq -e \"[.. | objects | select(.namespace? == \\\""
+            + ns + "\\\" and (.w // 0) > 1 and (.h // 0) > 1)] | length " + op + "\""
+        )
+
+    # The new notification canvas stays mapped while idle. Its actual
+    # cards, rather than a layer's dimensions, establish visibility.
+    def notification_probe(present):
+        condition = ".toasts > 0" if present else ".toasts == 0"
+        return as_demo("omarchy-shell notifications probe | jq -e " + json.dumps(condition))
+
+    desktop_ocr = (
+        "WAYLAND_DISPLAY=wayland-1 grim /tmp/desktop-ocr.png"
+        " && magick /tmp/desktop-ocr.png -resize 200% /tmp/desktop-ocr-large.png"
+        " && tesseract /tmp/desktop-ocr-large.png stdout --psm 11 2>/dev/null"
+    )
+
+    # Lock lifecycle evidence (runs as root): the shell logs
+    # "omarchy lock <iso> <event>" via console.log, which quickshell writes
+    # to its per-instance log — the canonical location (verified identical
+    # on a production laptop install, including real lock/unlock cycles).
+    # It never reaches journald or /tmp/hyprland.log.
+    def lock_log_seen(pattern):
+        return "grep -Eq '" + pattern + "' /run/user/1000/quickshell/by-id/*/log.log"
+
+    # Bounded retry for QMP send_chars single-shots (focus races under QEMU).
+    # Re-checks `ready` each attempt, types `text` + Enter, then waits for
+    # `success`. Optional `before_retry` resets UI state between attempts
+    # (e.g. re-summon the menu so search text does not accumulate). Used only
+    # at the three password/search injection sites below.
+    def send_chars_retry(
+        text, ready, success, attempts=3, per_try_timeout=15, before_retry=None
+    ):
+        last = None
+        for attempt in range(1, attempts + 1):
+            if attempt > 1 and before_retry is not None:
+                before_retry()
+            machine.succeed(ready)
+            machine.send_chars(text)
+            machine.send_key("ret")
+            try:
+                machine.wait_until_succeeds(success, timeout=per_try_timeout)
+                return
+            except Exception as e:
+                last = e
+                machine.log(
+                    "send_chars_retry %d/%d for %r did not meet success"
+                    % (attempt, attempts, text)
+                )
+        assert last is not None, "send_chars_retry needs attempts >= 1"
+        raise last
+
+    with machine.nested("menu IPC: apps search launches the top hit"):
+        # 33783b1: summoning the "apps" route opens the dock's app grid
+        # (omarchy-dock-apps layer); the menu itself is the launcher now —
+        # summon root and let the search text pull the apps provider in
+        # (Menu.qml loadProvidersForSearch merges app rows into root).
+        machine.succeed(as_demo("omarchy-menu summon root"))
+        machine.wait_until_succeeds(layer_probe("omarchy-menu", True), timeout=30)
+
+        def re_summon_apps_menu():
+            machine.succeed(as_demo("omarchy-shell shell hide omarchy.menu || true"))
+            machine.sleep(1)
+            machine.succeed(as_demo("omarchy-menu summon root"))
+            machine.wait_until_succeeds(layer_probe("omarchy-menu", True), timeout=30)
+
+        send_chars_retry(
+            "foot",
+            ready=layer_probe("omarchy-menu", True),
+            success=as_demo(
+                "hyprctl -j clients | jq -e \"map(select(.class == \\\"foot\\\")) | length > 0\""
+            ),
+            attempts=3,
+            per_try_timeout=20,
+            before_retry=re_summon_apps_menu,
+        )
+        machine.screenshot("behavioral-menu-apps-foot")
+        # Upstream asserts the menu closes after launching; under QEMU the
+        # layer occasionally lingers (no focus-follows-launch on a headless
+        # seat), so treat close as best-effort and force it over IPC. The
+        # asserted contract is the launch effect above.
+        try:
+            machine.wait_until_succeeds(layer_probe("omarchy-menu", False), timeout=20)
+        except Exception:
+            machine.log("note: menu layer still open after launch; hiding via IPC")
+            machine.succeed(as_demo("omarchy-shell shell hide omarchy.menu"))
+            machine.wait_until_succeeds(layer_probe("omarchy-menu", False), timeout=15)
+        # Cleanup: kill every foot* process (deterministic). The window's
+        # owning PID may be an app2unit/uwsm scope, so killing the single
+        # hyprctl-reported PID is not enough; pkill the process family.
+        machine.log(
+            "foot clients before cleanup: "
+            + machine.succeed(as_demo("hyprctl -j clients | jq -c \"map(select(.class == \\\"foot\\\"))\""))
+        )
+        machine.succeed(
+            as_demo("pkill -x foot; pkill -x footclient; pkill -x foot-server; true")
+        )
+        machine.wait_until_succeeds(
+            as_demo("hyprctl -j clients | jq -e \"map(select(.class == \\\"foot\\\")) | length == 0\""),
+            timeout=30,
+        )
+
+    with machine.nested("notification renders (OCR) and dismisses"):
+        machine.succeed(as_demo("omarchy-shell notifications dismissAll || true"))
+        # -u critical: Service.qml's durationFor() returns 0 for critical
+        # urgency (never expires); every other urgency is capped at
+        # maxPopupDuration=30s regardless of the requested expire-time.
+        # In-VM OCR retries are slow enough (grim+magick+tesseract, several
+        # seconds per attempt) that a normal-urgency popup expired
+        # mid-loop on the v4.0.3 bump — the layer unmaps, later grims
+        # capture a cardless desktop, and the wait times out chasing a
+        # popup that is already gone. Critical keeps the card on screen
+        # for the whole assertion window; dismissal below still ends it.
+        machine.succeed(
+            as_demo("omarchy-notification-send -u critical \"Acceptance notification\" \"Shell notification rendering\"")
+        )
+        machine.wait_until_succeeds(notification_probe(True), timeout=30)
+        machine.wait_until_succeeds(layer_probe("omarchy-notifications", True), timeout=30)
+        machine.screenshot("behavioral-notification")
+        # Rendered content, not just the surface: OCR the visible popup.
+        # grim needs WAYLAND_DISPLAY (session is wayland-1, not the
+        # wayland-0 default).
+        # The raw full-screen `--psm 11` pipeline cannot read
+        # the BOLD title reliably (measured in a 20-iteration lab inside
+        # this VM: 0/10 title matches while the popup was clearly visible,
+        # body 10/10; fc-match resolves LiberationSans-Bold correctly, so
+        # it is OCR fragility, not a font fallback). Grayscale + 200%
+        # upscale + -normalize made the title 10/10 in the same run, same
+        # popup. A region crop proved unnecessary (10/10 without), so the
+        # pipeline stayed layout-independent (no hardcoded screen region).
+        # v4.0.3 re-tune: the bump's wallpaper/rasterization changes made
+        # the FULL-FRAME -normalize histogram lose the popup text again
+        # (0/2 strings, bar-only reads; reproduced deterministically
+        # outside the VM with the pinned tesseract on the VM's own grim
+        # artifact). The notifications layer surface itself is full-screen
+        # (the popup floats inside it), so layer geometry cannot drive a
+        # crop — instead crop the top-right quadrant where the popup
+        # anchors (zone, not card coordinates): the original -normalize
+        # then has a local histogram again and reads title+body with the
+        # pinned toolchain (psm 6 and 11). Negative fixture below still
+        # applies to the same chain.
+        # 349ecc0 re-tune: OWE now owns the desktop background and renders
+        # it black under llvmpipe here, and -normalize over a black crop
+        # washes the card text out (0/2 strings; -auto-level reads both,
+        # reproduced on the VM's grim artifact with the pinned toolchain).
+        # OCR both preprocessings of one grab and match on the union, so
+        # either background works.
+        # The grab is the full 1280x800 virtio-gpu output (measured: grim
+        # PNG 1280 x 800, hyprctl monitors Virtual-1 1280x800); the crop is
+        # its top-right quadrant, taken relative to the frame size
+        # (NorthEast gravity, 50%x50%) so a different output mode still
+        # crops the zone the popup anchors to. At 1280x800 it is
+        # pixel-identical to the former fixed 640x400+640+0 crop.
+        # f2a39c4 re-tune: on the bump's rendered wallpaper, sparse-text
+        # segmentation (--psm 11) skips both clearly rendered card lines.
+        # Replaying the VM screenshot with this pinned toolchain reads
+        # both lines with block segmentation (--psm 6), for either
+        # preprocessing. Keep both segmentation modes and the same
+        # dismissal negative fixtures so wallpaper texture cannot turn
+        # a correctly rendered notification into a false failure.
+        ocr_crop = "magick /tmp/notif.png -gravity NorthEast -crop 50%x50%+0+0 +repage +gravity -colorspace Gray -resize 200% "
+        ocr_chain = (
+            "WAYLAND_DISPLAY=wayland-1 grim /tmp/notif.png"
+            + " && " + ocr_crop + "-normalize /tmp/notif-proc.png"
+            + " && " + ocr_crop + "-auto-level /tmp/notif-proc-level.png"
+            + " && { tesseract /tmp/notif-proc.png stdout --psm 11;"
+            + " tesseract /tmp/notif-proc.png stdout --psm 6;"
+            + " tesseract /tmp/notif-proc-level.png stdout --psm 11;"
+            + " tesseract /tmp/notif-proc-level.png stdout --psm 6; } 2>/dev/null"
+        )
+        try:
+            machine.wait_until_succeeds(
+                as_demo(ocr_chain + " | tee /tmp/notif-ocr.txt | grep -qi \"Acceptance notification\" && grep -qi \"Shell notification rendering\" /tmp/notif-ocr.txt"),
+                timeout=30,
+            )
+        except Exception:
+            # Failure artifacts: the check log must explain
+            # the mismatch — raw OCR text, word-level TSV confidence,
+            # the captured PNG (base64) from the last failed attempt, the
+            # full layer map (popup geometry/visibility), and the shell's
+            # own log tail (QML errors land there, never on the console).
+            machine.log("notification OCR raw text: " + machine.succeed("cat /tmp/notif-ocr.txt 2>/dev/null || true"))
+            machine.log("notification OCR tsv: " + machine.succeed("tesseract /tmp/notif-proc.png stdout --psm 11 tsv 2>/dev/null | awk -F'\\t' '$1 == 5 {print $11, $12}' || true"))
+            machine.log("notification png base64: " + machine.succeed("base64 -w0 /tmp/notif.png || true"))
+            machine.log(
+                "notification layer map: "
+                + machine.succeed(as_demo("hyprctl -j layers") + " || true")
+            )
+            machine.log(
+                "quickshell log tail: "
+                + machine.succeed(
+                    as_demo("tail -40 /run/user/1000/quickshell/by-id/*/log.log 2>/dev/null || true")
+                )
+            )
+            raise
+
+        # The canvas remains mapped after dismissal; zero cards plus the
+        # negative OCR fixture prove that the content really disappeared.
+        machine.succeed(as_demo("omarchy-shell notifications dismissAll"))
+        machine.wait_until_succeeds(notification_probe(False), timeout=30)
+        # Negative fixture: the SAME OCR pipeline + matcher must FAIL when
+        # no popup is visible (proves the assertion has teeth, per the
+        # acceptance criteria).
+        machine.fail(as_demo(ocr_chain + " | grep -qi \"Acceptance notification\""))
+        machine.fail(as_demo(ocr_chain + " | grep -qi \"Shell notification rendering\""))
+
+    with machine.nested("volume OSD appears on sink change and hides"):
+        machine.succeed(as_demo("pactl load-module module-null-sink sink_name=acceptance"))
+        machine.succeed(as_demo("pactl set-default-sink acceptance"))
+        # The OSD is not reactive: omarchy-audio-output-volume (the keybind
+        # path) changes the volume AND shows the OSD. Each retry re-fires
+        # the popup (its hide timer restarts), so the layer probe runs
+        # while the card is still visible.
+        machine.wait_until_succeeds(
+            as_demo("omarchy-audio-output-volume raise && hyprctl -j layers | jq -e \"[.. | objects | select(.namespace? == \\\"omarchy-osd\\\" and (.w // 0) > 1 and (.h // 0) > 1)] | length > 0\""),
+            timeout=30,
+        )
+        machine.screenshot("behavioral-osd")
+        machine.wait_until_succeeds(layer_probe("omarchy-osd", False), timeout=60)
+
+    # Count new lifecycle records so a second cycle cannot pass using the
+    # first cycle's secure/unlocked messages.
+    def lock_event_count(event):
+        return int(machine.succeed(
+            "awk '/omarchy lock .*" + event
+            + "/ {n++} END {print n+0}' /run/user/1000/quickshell/by-id/*/log.log"
+        ).strip())
+
+    for cycle in range(2):
+        with machine.nested("lock authenticates, cycle " + str(cycle + 1)):
+            secure_before = lock_event_count("secure=true")
+            unlocked_before = lock_event_count("unlocked")
+            machine.succeed(as_demo("omarchy-shell lock lock"))
+            retry(lambda _: lock_event_count("secure=true") > secure_before, timeout_seconds=30)
+            machine.screenshot("behavioral-lock-" + str(cycle + 1))
+            send_chars_retry(
+                "demo",
+                ready=lock_log_seen("omarchy lock .*secure=true"),
+                success=("test $(awk '/omarchy lock .*unlocked/ {n++} END {print n+0}' "
+                         "/run/user/1000/quickshell/by-id/*/log.log) -gt "
+                         + str(unlocked_before)),
+                attempts=3,
+                per_try_timeout=15,
+            )
+
+    with machine.nested("polkit prompt authenticates (agent round trip)"):
+        machine.succeed("rm -f /tmp/pkexec.out /tmp/pkexec.err /tmp/pkrun.sh")
+        # pkexec must run inside the systemd user manager cgroup (its polkit
+        # subject then resolves to the manager session the quickshell agent
+        # serves — `su -` resolves to no session and pkexec fails instantly).
+        # Spawning via hyprctl exec_cmd makes pkexec a Hyprland child — same
+        # as a real keybind-launched privileged action. With the Lua config,
+        # `hyprctl dispatch X` evals as Lua `hl.dispatch(X)`, so X must be a
+        # dispatcher object (hl.dsp.exec_cmd), not the legacy `exec` keyword.
+        machine.succeed(
+            "printf '%s\\n' 'pkexec id -u >/tmp/pkexec.out 2>/tmp/pkexec.err' > /tmp/pkrun.sh && chmod +x /tmp/pkrun.sh"
+        )
+        machine.succeed(
+            as_demo("hyprctl dispatch \"hl.dsp.exec_cmd(\\\"/tmp/pkrun.sh\\\")\"")
+        )
+        try:
+            machine.wait_until_succeeds(layer_probe("omarchy-polkit", True), timeout=30)
+        except Exception:
+            machine.log("pkexec.err: " + machine.execute("cat /tmp/pkexec.err")[1])
+            machine.log(
+                "sessions: " + machine.execute("loginctl list-sessions")[1]
+            )
+            raise
+        machine.screenshot("behavioral-polkit")
+        send_chars_retry(
+            "demo",
+            ready=layer_probe("omarchy-polkit", True),
+            success="grep -q \"^0$\" /tmp/pkexec.out",
+            attempts=3,
+            per_try_timeout=15,
+        )
+        machine.wait_until_succeeds(layer_probe("omarchy-polkit", False), timeout=30)
+
+    # Two real compositor outputs, one provided by Hyprland's headless
+    # backend. Verify monitor-local slots and Quickshell's live workspace
+    # IDs after change_id, then unplug with an open menu. This exercises
+    # virtual hotplug; it does not claim physical connector/EDID coverage.
+    def lua_dispatch(expression):
+        return as_demo("hyprctl dispatch " + json.dumps(expression))
+
+    def live_monitors():
+        return json.loads(machine.succeed(as_demo("hyprctl -j monitors")))
+
+    with machine.nested("per-monitor workspaces and output removal"):
+        original = live_monitors()
+        assert len(original) == 1, original
+        primary = original[0]["name"]
+        # Independent model consumer of the same built Quickshell binary.
+        # An IPC query observes actual Hyprland events, including the
+        # workspace-ID change that the old 0.3.2 tag did not handle.
+        machine.succeed("cat > /tmp/workspace-probe.qml <<'QML'\n"
+            "import Quickshell\nimport Quickshell.Io\nimport Quickshell.Hyprland\n"
+            "Scope { IpcHandler { target: \"workspaceProbe\"; "
+            "function ids(): string { return JSON.stringify("
+            "Hyprland.workspaces.values.map(w => w.id).sort((a,b) => a-b)); } } }\nQML")
+        probe = "WAYLAND_DISPLAY=wayland-1 quickshell -p /tmp/workspace-probe.qml"
+        machine.succeed(as_demo(probe + " --daemonize"))
+        machine.succeed(as_demo("hyprctl output create headless"))
+        retry(lambda _: len(live_monitors()) == 2, timeout_seconds=30)
+        secondary = next(m["name"] for m in live_monitors() if m["name"] != primary)
+        try:
+            machine.succeed(as_demo("hyprctl eval " + json.dumps(
+                "hl.monitor({ output = " + json.dumps(secondary)
+                + ", mode = \"1280x800@60\", position = \"auto\", scale = 1 })"
+            )))
+            for monitor in [primary, secondary]:
+                machine.succeed(lua_dispatch("o.workspaces.focus(3, " + json.dumps(monitor) + ")"))
+            monitors = {m["name"]: m for m in live_monitors()}
+            first_id = monitors[primary]["activeWorkspace"]["id"]
+            second_id = monitors[secondary]["activeWorkspace"]["id"]
+            assert first_id != second_id, monitors
+            assert (first_id - 1) % 10 == (second_id - 1) % 10 == 2, monitors
+            mapping = machine.succeed(as_demo("cat ~/.local/state/omarchy/monitor-workspaces"))
+            assert primary in mapping and secondary in mapping, mapping
+
+            def workspace_models_agree(expected_id):
+                actual = sorted(w["id"] for w in json.loads(
+                    machine.succeed(as_demo("hyprctl -j workspaces"))))
+                observed = json.loads(machine.succeed(as_demo(probe + " ipc call workspaceProbe ids")))
+                return expected_id in actual and observed == actual
+            # Instantiate and check the lazy singleton BEFORE the event;
+            # otherwise a fresh snapshot after it could hide a missed event.
+            retry(lambda _: workspace_models_agree(second_id), timeout_seconds=30)
+            # Keep the workspace active so Hyprland does not delete it.
+            changed_id = second_id + 3
+            machine.succeed(lua_dispatch(
+                "hl.dsp.workspace.change_id({ workspace = " + json.dumps(str(second_id))
+                + ", id = " + str(changed_id) + " })"
+            ))
+            retry(lambda _: workspace_models_agree(changed_id), timeout_seconds=30)
+            machine.succeed(as_demo("omarchy-menu summon root"))
+            machine.wait_until_succeeds(layer_probe("omarchy-menu", True), timeout=30)
+            machine.succeed(as_demo("hyprctl output remove " + secondary))
+            retry(lambda _: len(live_monitors()) == 1, timeout_seconds=30)
+            machine.wait_until_succeeds(layer_probe("omarchy-menu", True), timeout=30)
+            machine.wait_until_succeeds(as_demo(desktop_ocr + ' | grep -qi "Apps"'), timeout=30)
+            machine.screenshot("monitor-removal-menu")
+            machine.succeed(as_demo("omarchy-shell shell hide omarchy.menu"))
+            machine.wait_until_succeeds(layer_probe("omarchy-menu", False), timeout=30)
+        finally:
+            machine.execute(as_demo("hyprctl output remove " + secondary))
+            machine.execute(as_demo(probe + " kill"))
+        machine.succeed(lua_dispatch("o.workspaces.focus(1, " + json.dumps(primary) + ")"))
+
+    with machine.nested("floating titlebar renders and retints in the live session"):
+        machine.succeed(lua_dispatch("hl.dsp.exec_cmd(" + json.dumps(
+            "foot --app-id=acceptance-titlebar --title=AcceptanceTitlebar sleep infinity"
+        ) + ")"))
+        def titlebar_client():
+            return next((c for c in json.loads(machine.succeed(as_demo("hyprctl clients -j")))
+                         if c["class"] == "acceptance-titlebar"), None)
+        retry(lambda _: titlebar_client() is not None, timeout_seconds=30)
+        # Starting from tiling, cycling back selects floating and loads the
+        # real plugin against the same Hyprland build as the compositor.
+        machine.succeed(as_demo("omarchy-hyprland-workspace-layout-toggle back"))
+        machine.wait_until_succeeds(as_demo(
+            "hyprctl plugin list -j | jq -e \"any(.[]; .name == \\\"hyprbars\\\")\""
+        ), timeout=30)
+        retry(lambda _: titlebar_client()["floating"], timeout_seconds=30)
+        for theme, color in [("tokyo-night", "24283B"), ("nord", "3B4252")]:
+            # Real theme IPC and Hyprland reload run; only the wallpaper
+            # transition is skipped to isolate the titlebar's pixels.
+            machine.succeed(as_demo("OMARCHY_THEME_SKIP_BACKGROUND=1 omarchy-theme-set " + theme))
+            machine.succeed(as_demo("omarchy-shell notifications dismissAll"))
+            def titlebar_pixels(_last=False):
+                client = titlebar_client()
+                x, y = client["at"]
+                width = client["size"][0]
+                crop = "%dx70+%d+%d" % (width, x, max(0, y - 35))
+                return machine.execute(as_demo(
+                    "WAYLAND_DISPLAY=wayland-1 grim /tmp/titlebar.png"
+                    " && magick /tmp/titlebar.png -crop " + crop
+                    + " +repage /tmp/titlebar-crop.png"
+                    " && magick /tmp/titlebar-crop.png -format %c histogram:info:-"
+                    + " | grep -qi \"#" + color + "\""
+                ))[0] == 0
+            retry(titlebar_pixels, timeout_seconds=30)
+            machine.wait_until_succeeds(as_demo(
+                "magick /tmp/titlebar-crop.png -resize 300% /tmp/titlebar-text.png"
+                " && tesseract /tmp/titlebar-text.png stdout --psm 11 2>/dev/null"
+                " | grep -qi AcceptanceTitlebar"
+            ), timeout=30)
+            machine.screenshot("titlebar-live-" + theme)
+        address = titlebar_client()["address"]
+        machine.succeed(lua_dispatch("hl.dsp.window.close({ window = " + json.dumps("address:" + address) + " })"))
+        machine.succeed(as_demo("omarchy-hyprland-workspace-layout-toggle"))
+        machine.succeed(as_demo("omarchy-shell notifications dismissAll"))
+
+    # --- (12) Plugin clone: behavioral run (TODO #23). ---------------------
+    # Runs last on purpose. Any change inside ~/.config/omarchy/plugins makes
+    # the shell reload every plugin (inotify -> reloadPlugins -> unload +
+    # rescan). On the FORMER pin (quickshell 0.3.0) that reload duplicated
+    # the IpcHandler registrations — the re-created OSD handler was rejected
+    # ("... another handler is registered for target osd"), the stale one
+    # belonged to the unloaded instance, and the first `omarchy osd` call
+    # rendered nothing while still exiting 0 (in two runs the later volume-OSD
+    # assertion then timed out). The current pin (2b4501a, pkgs/quickshell.nix)
+    # renders that first call in every run; the strict assertion further down
+    # guards exactly that. The reload still logs duplicate-handler warnings
+    # for the bar-widget targets on 0.3.1 (upstream's broader class,
+    # omacom/omarchy#9533/#10746) — keeping this cycle last means those
+    # warnings cannot mask anything else.
+    #
+    # What this covers: the catalog lookup (jq over the packaged plugin
+    # tree), the store->$HOME copies (the patched cp -aL sites), the manifest
+    # rewrite (jq: id/name/clonedFrom), discovery through the live shell IPC
+    # (omarchy-shell rescanPlugins + omarchy-plugin-list --json), the enable,
+    # and removal — where the shell must put the built-in back.
+    def plugin_listing():
+        return {
+            p["id"]: p
+            for p in json.loads(machine.succeed(as_demo("omarchy plugin list --json")))
+        }
+
+    def clone_removed(clone_id, source_id, _last=False):
+        # The shell rescans asynchronously (inotify -> reload), so poll for the
+        # post-remove state instead of reading once right after the command.
+        # A transient IPC hiccup mid-reload also counts as "not converged yet"
+        # rather than aborting the retry loop.
+        try:
+            listing = plugin_listing()
+        except Exception:
+            if _last:
+                raise
+            return False
+        ok = clone_id not in listing and listing.get(source_id, {}).get("enabled") is True
+        if not ok and _last:
+            raise AssertionError(
+                "remove did not converge: %s=%r %s=%r"
+                % (clone_id, listing.get(clone_id), source_id, listing.get(source_id))
+            )
+        return ok
+
+    # Shown, not merely mapped: the OSD surface stays parked at 1x1 between
+    # popups since 349ecc0 (see layer_probe).
+    def osd_shown():
+        return machine.execute(layer_probe("omarchy-osd", True))[0] == 0
+
+    def osd_renders(_last=False):
+        machine.execute(as_demo("omarchy-osd -i volume-high -p 50 -d 4000"))
+        machine.sleep(2)
+        return osd_shown()
+
+    def lazy_panels_after_reload(stage):
+        with machine.nested("menu, dock and notifications render after " + stage):
+            machine.succeed(as_demo("omarchy-menu summon root"))
+            machine.wait_until_succeeds(layer_probe("omarchy-menu", True), timeout=30)
+            machine.wait_until_succeeds(as_demo(desktop_ocr + ' | grep -qi "Apps"'), timeout=30)
+            machine.succeed(as_demo("omarchy-shell shell hide omarchy.menu"))
+            machine.wait_until_succeeds(layer_probe("omarchy-menu", False), timeout=30)
+            machine.succeed(as_demo("omarchy-menu summon apps"))
+            machine.wait_until_succeeds(layer_probe("omarchy-dock-apps", True), timeout=30)
+            # The layer exists before synchronous icon loads over the VM's
+            # 9p store finish. Observe the rendered grid before asking it to
+            # close; toggling again during that I/O can exceed IPC's 2 s.
+            machine.wait_until_succeeds(
+                as_demo(desktop_ocr + ' | grep -qi "Search apps"'), timeout=45
+            )
+            machine.screenshot("reload-grid-" + stage)
+            machine.succeed(as_demo("omarchy-menu summon apps"))
+            machine.wait_until_succeeds(layer_probe("omarchy-dock-apps", False), timeout=30)
+            machine.succeed(as_demo("omarchy-shell notifications dismissAll"))
+            machine.succeed(as_demo('omarchy-notification-send -u critical "Reload notification" "Shell reload rendering"'))
+            machine.wait_until_succeeds(notification_probe(True), timeout=30)
+            machine.wait_until_succeeds(
+                as_demo(ocr_chain + ' | grep -qi "Shell reload rendering"'), timeout=45
+            )
+            machine.screenshot("reload-panels-" + stage)
+            machine.succeed(as_demo("omarchy-shell notifications dismissAll"))
+            machine.wait_until_succeeds(notification_probe(False), timeout=30)
+
+    # Warm the OSD panel before the reload: the first call of a session can
+    # be cold (the probe observes the baseline needing a second attempt), and
+    # the strict post-reload check below must not fail for that reason.
+    with machine.nested("OSD warm-up before the plugin reload"):
+        retry(osd_renders, timeout_seconds=30)
+    # The warm-up popup (4000 ms + hide animation) must be gone before the
+    # reload, or the strict first-call check below could observe it instead
+    # of the post-reload popup.
+    machine.wait_until_succeeds(layer_probe("omarchy-osd", False), timeout=30)
+
+    with machine.nested("omarchy plugin clone runs end to end"):
+        machine.succeed(as_demo("omarchy plugin clone omarchy.clock"))
+        clone_dir = "~/.config/omarchy/plugins/demo.clock"
+        machine.succeed(as_demo("test -f " + clone_dir + "/manifest.json"))
+        manifest = json.loads(
+            machine.succeed(as_demo("cat " + clone_dir + "/manifest.json"))
+        )
+        assert manifest["id"] == "demo.clock", manifest
+        assert manifest["name"] == "My Clock", manifest
+        assert manifest.get("omarchy", {}).get("clonedFrom") == "omarchy.clock", manifest
+        # The reason the L4 patch exists: every cloned entry is user-writable
+        # (without it the clone is mode 444 in 555 directories).
+        unwritable = machine.succeed(
+            as_demo("find " + clone_dir + " ! -writable")
+        ).strip()
+        assert unwritable == "", "clone left read-only entries: %r" % unwritable
+        listing = plugin_listing()
+        assert "demo.clock" in listing, listing
+        assert listing["demo.clock"]["enabled"] is True, listing["demo.clock"]
+
+        # Strict regression guard for the quickshell pin (pkgs/quickshell.nix):
+        # the FIRST OSD call after the reload must render. On 0.3.0 the reload
+        # leaves a stale IpcHandler serving the destroyed instance — that first
+        # call rendered nothing in all 5 preserved runs, with some staying dead
+        # for 30 s+ (the volume-OSD section above timed out that way) — while
+        # 0.3.1 renders it on the first call in every run. No retry here on
+        # purpose: a later call recovers in some 0.3.0 runs, so retrying would
+        # hide the state the pin exists to prevent. Note the reload does still
+        # log duplicate-handler warnings for the bar-widget targets on 0.3.1
+        # (upstream's broader class, omacom/omarchy#9533/#10746); the OSD
+        # target is the one this port relies on and the one that broke.
+        # One call, then poll the layer (no re-fire): the popup stays up for
+        # 4000 ms, so polling observes it whenever it appears, without a
+        # fixed sleep racing the render.
+        machine.execute(as_demo("omarchy-osd -i volume-high -p 50 -d 4000"))
+        try:
+            machine.wait_until_succeeds(layer_probe("omarchy-osd", True), timeout=10)
+        except Exception:
+            raise AssertionError(
+                "OSD dead on the first call after the plugin reload (stale IpcHandler)"
+            )
+
+        lazy_panels_after_reload("clone")
+
+        machine.succeed(as_demo("omarchy plugin remove demo.clock --yes"))
+        with machine.nested("remove converges (shell rescan is async)"):
+            retry(lambda last: clone_removed("demo.clock", "omarchy.clock", last), timeout_seconds=30)
+        lazy_panels_after_reload("remove")
+
+    # Second clone targets the rename pass: omarchy.indicators carries
+    # clonePaths (a whole sibling directory + a relative import rewritten in
+    # place by sed), which exercises the dir-flavoured cp -aL site and the
+    # jq/rg/sed wiring; omarchy.clock alone never runs that pass. Note the
+    # pass is NOT the mode patch's failure mode — sed -i renames within the
+    # writable staging dir and succeeds even unpatched (verified) — the
+    # writability assertion below is what the --no-preserve=mode patch is
+    # for.
+    with machine.nested("plugin clone rewrites relative paths (sed pass)"):
+        machine.succeed(as_demo("omarchy plugin clone omarchy.indicators"))
+        clone_dir = "~/.config/omarchy/plugins/demo.indicators"
+        # The sibling directory came along (the dir-flavoured cp -aL site).
+        machine.succeed(as_demo("test -f " + clone_dir + "/indicators/ScreenRecording.qml"))
+        manifest = json.loads(
+            machine.succeed(as_demo("cat " + clone_dir + "/manifest.json"))
+        )
+        assert manifest.get("omarchy", {}).get("clonedFrom") == "omarchy.indicators", manifest
+        # update_manifest deletes clonePaths after the copy.
+        assert "clonePaths" not in manifest.get("omarchy", {}), manifest
+        # The sed pass rewrote the relative import and left no stale path.
+        # (Checked host-side: the as_demo wrapper is single-quoted, so the
+        # command string must not carry single quotes of its own.)
+        qml = machine.succeed(as_demo("cat " + clone_dir + "/Indicators.qml"))
+        assert 'Qt.resolvedUrl("indicators/' in qml, \
+            "sed pass did not rewrite the relative import"
+        assert "../indicators" not in qml, "clone kept a stale relative path"
+        stale = machine.succeed(
+            as_demo("grep -rF -- ../indicators " + clone_dir + " || true")
+        ).strip()
+        assert stale == "", "clone kept stale relative paths: %r" % stale
+        unwritable = machine.succeed(
+            as_demo("find " + clone_dir + " ! -writable")
+        ).strip()
+        assert unwritable == "", "clone left read-only entries: %r" % unwritable
+        listing = plugin_listing()
+        assert listing["demo.indicators"]["enabled"] is True, listing["demo.indicators"]
+        machine.succeed(as_demo("omarchy plugin remove demo.indicators --yes"))
+        with machine.nested("remove converges (shell rescan is async)"):
+            retry(lambda last: clone_removed("demo.indicators", "omarchy.indicators", last), timeout_seconds=30)
+
+    # --- (8) Screenshot for diagnostics. -----------------------------------
+    # Under QEMU without virgil the Aquamarine framebuffer is near-empty (see
+    # tests/desktop.nix); kept for manual inspection via `nix log`.
+    machine.screenshot("omarchy-ux")
+  '';
+}
