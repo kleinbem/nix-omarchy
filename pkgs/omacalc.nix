@@ -6,6 +6,7 @@
   stdenv,
   fetchFromGitHub,
   qt6,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -37,6 +38,8 @@ stdenv.mkDerivation (finalAttrs: {
     install -Dm555 omacalc "$out/bin/omacalc"
     runHook postInstall
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Simple calculator (Omarchy app)";

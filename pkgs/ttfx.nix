@@ -9,6 +9,7 @@
   lib,
   rustPlatform,
   fetchFromGitHub,
+  nix-update-script,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -23,6 +24,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   };
 
   cargoHash = "sha256-ntoj5bmAa9U2+3K1UX6HL0t6MjfCYQNe5LuiuNJ/CnY=";
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Terminal text effects as a single static binary (Rust TTE port, Omarchy screensaver)";

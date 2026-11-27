@@ -14,6 +14,7 @@
   stdenv,
   fetchFromGitHub,
   qt6,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -53,6 +54,8 @@ stdenv.mkDerivation (finalAttrs: {
     install -Dm644 LICENSE "$out/share/licenses/omawrite/LICENSE"
     install -Dm644 fonts/OFL.txt "$out/share/licenses/omawrite/OFL.txt"
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Dead-simple Markdown writing app built with Qt Quick (Omarchy app)";

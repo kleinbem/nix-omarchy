@@ -17,6 +17,7 @@
   pkg-config,
   qt6,
   libpulseaudio,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -61,6 +62,8 @@ stdenv.mkDerivation (finalAttrs: {
       "$out/share/applications/monologue.desktop"
     runHook postInstall
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Simple, theme-synced webcam recorder (Omarchy app)";

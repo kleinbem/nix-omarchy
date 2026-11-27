@@ -21,6 +21,7 @@
   pkg-config,
   rustPlatform,
   fetchFromGitHub,
+  nix-update-script,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -59,6 +60,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   # The schema is only a config reference for IDE completion; the picker works
   # without a pre-installed schema.json (config is read from
   # $XDG_CONFIG_HOME/hyprland-preview-share-picker/config.yaml at runtime).
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Alternative share picker for Hyprland with window and monitor previews";

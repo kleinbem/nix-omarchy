@@ -15,6 +15,7 @@
   git,
   trash-cli,
   xdg-utils,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -72,6 +73,8 @@ stdenv.mkDerivation (finalAttrs: {
         ]
       }
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Graphical disk-space treemap with reviewed cleanup selections";

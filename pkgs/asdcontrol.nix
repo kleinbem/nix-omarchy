@@ -9,6 +9,7 @@
   stdenv,
   linuxHeaders,
   fetchFromGitHub,
+  nix-update-script,
 }:
 
 stdenv.mkDerivation (_finalAttrs: {
@@ -40,6 +41,8 @@ stdenv.mkDerivation (_finalAttrs: {
     install -Dm755 asdcontrol $out/bin/asdcontrol
     runHook postInstall
   '';
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Apple Studio Display / Pro Display XDR brightness control for Linux";
